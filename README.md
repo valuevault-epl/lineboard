@@ -13,13 +13,15 @@ The app opens full screen. It works without signal, showing the last predictions
 
 ## How it updates
 You don't edit this folder by hand.
-* `index.html` is rebuilt by `..\NBLModel\site_builder.py` every time one of the models runs `predict.py` (NBL, NFL or CFB).
-* The site builder commits and pushes the new `index.html`, and GitHub Pages serves it within a minute or two.
-* The app fetches the new version the next time it opens with signal.
+* Each model run (`predict.py` for NBL, NFL or CFB) makes `..\NBLModel\site_builder.py` rewrite `index.html` and `data.json`, then commit and push them. The push takes about 2 seconds.
+* The app reads `data.json` straight from the GitHub API, which has a new push within about a second. GitHub Pages itself can take minutes.
+* It checks every time you open the app or switch back to it, and every minute while it's on screen. When there are new predictions it reloads itself. A check with nothing new costs nothing against GitHub's limit of 60 requests an hour.
+* It opens instantly from its saved copy, so it also works with no signal, showing the last predictions it loaded.
 
 To stop the automatic push, set the environment variable `LINEBOARD_NO_PUSH=1` before running a model.
 
 ## Files
-* `index.html`: the board, with that week's predictions inside it.
+* `index.html`: the board, with that week's predictions inside it (used when opening offline).
+* `data.json`: the same predictions with a timestamp, which the app checks for updates.
 * `manifest.webmanifest` and `icons/`: name, colours and home-screen icon.
-* `sw.js`: offline cache. It loads from the network first, so you always get fresh numbers when online.
+* `sw.js`: offline cache. It opens the saved copy at once and refreshes it in the background.
