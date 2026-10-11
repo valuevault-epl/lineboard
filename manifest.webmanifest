@@ -1,0 +1,17 @@
+{
+  "name": "Line Board",
+  "short_name": "Line Board",
+  "description": "Win chances, minimum prices, alternate lines and totals for NBL, NFL and college football games.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#14202c",
+  "theme_color": "#14202c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
