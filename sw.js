@@ -1,7 +1,7 @@
-// Offline support. The board itself (index.html, with this week's predictions inside it) comes from
-// the network whenever it answers quickly, so a refresh shows the latest numbers; with no signal the
-// last copy opens from cache. Google Fonts are cached on first use.
-const VERSION = 'lineboard-v1';
+// Offline support. The app opens instantly from its saved copy and refreshes that copy in the
+// background. Fresh predictions don't depend on this file: the page itself checks data.json through
+// the GitHub API every time it is opened. Google Fonts are cached on first use.
+const VERSION = 'lineboard-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/favicon.svg', './icons/icon-192.png'];
 const CDN_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
@@ -12,15 +12,17 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
-function networkFirst(req) {
-  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 4000));
+// Serve the saved copy straight away and update it from the network for next time.
+function staleWhileRevalidate(req) {
+  const key = req.mode === 'navigate' ? './index.html' : req;
   const net = fetch(req, { cache: 'no-store' }).then(res => {
-    if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); }
+    if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(key, copy)); }
     return res;
   });
-  net.catch(() => {});
-  return Promise.race([net, timeout]).catch(() =>
-    caches.match(req, { ignoreSearch: true }).then(hit => hit || (req.mode === 'navigate' ? caches.match('./index.html') : net)));
+  return caches.match(key, { ignoreSearch: true }).then(hit => {
+    if (hit) { net.catch(() => {}); return hit; }
+    return net;
+  });
 }
 function cacheFirst(req) {
   return caches.match(req).then(hit => hit || fetch(req).then(res => {
@@ -32,6 +34,8 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin === self.location.origin) e.respondWith(networkFirst(req));
-  else if (CDN_HOSTS.includes(url.hostname)) e.respondWith(cacheFirst(req));
+  if (url.origin === self.location.origin) {
+    if (url.pathname.endsWith('/data.json')) return;          // always straight from the network
+    e.respondWith(staleWhileRevalidate(req));
+  } else if (CDN_HOSTS.includes(url.hostname)) e.respondWith(cacheFirst(req));
 });
