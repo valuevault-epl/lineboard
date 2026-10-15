@@ -18,9 +18,9 @@
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0}[hidden]{display:none!important}</style>
 <script>
-// The predictions built into this page are from 2026-10-15T03:40:43Z. If the app has since fetched newer ones
+// The predictions built into this page are from 2026-10-15T03:46:10Z. If the app has since fetched newer ones
 // (saved below by the update check), start from those instead.
-window.__lbBuilt = '2026-10-15T03:40:43Z';
+window.__lbBuilt = '2026-10-15T03:46:10Z';
 window.__lbFresh = function () {
   try {
     var s = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null');
@@ -309,7 +309,7 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
     <div class="controls">
       <div class="edge"><label for="edge">Minimum edge</label><input id="edge" type="number" min="0" max="30" step="0.5" inputmode="decimal"><span class="small">%</span></div>
       <div class="edge stakeset" title="Stakes are this percentage of a full Kelly stake, on a bank of this many units, never more than the max">
-        <label for="kfrac">Kelly</label><input id="kfrac" type="number" min="1" max="100" step="1" inputmode="decimal"><span class="small">%</span>
+        <label for="kfrac">Kelly</label><input id="kfrac" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
         <label for="kmax">Max</label><input id="kmax" type="number" min="0.25" max="20" step="0.25" inputmode="decimal"><span class="small">u</span>
         <label for="kbank">Bank</label><input id="kbank" type="number" min="10" max="10000" step="10" inputmode="decimal"><span class="small">u</span>
       </div>
@@ -443,11 +443,11 @@ function verdict(q, odds) {
 
 // ---- staking: fractional Kelly ----
 // Full Kelly = (p * b - l) / b of the bank, where b = price - 1, p = win chance, l = loss chance
-// (a push hands the stake back). The model's edges run hot - a typical bet shows about +10% - so the
-// default stakes only 11% of full Kelly on a 100-unit bank: under 192.5 @ 1.90 at a model 61% (+16%)
-// comes to 2 units, a +10% bet at 1.90 to about 1.25. Stakes round to quarter units, never pass the
-// max, and are only given when the bet clears the minimum edge.
-const KELLY_DEFAULT = { frac: 11, max: 3, bank: 100 };
+// (a push hands the stake back). The model's edges run hot - a typical bet shows about +15% - so the
+// default stakes only 7.5% of full Kelly on a 100-unit bank: a typical +15% bet at 1.90 comes to
+// 1.25 units, +10% to 0.75, +20% to 1.75. Stakes round to quarter units, never pass the max, and are
+// only given when the bet clears the minimum edge.
+const KELLY_DEFAULT = { frac: 7.5, max: 3, bank: 100 };
 const KELLY = {
   frac: +store.get('kfrac', KELLY_DEFAULT.frac), max: +store.get('kmax', KELLY_DEFAULT.max), bank: +store.get('kbank', KELLY_DEFAULT.bank)
 };
@@ -502,7 +502,7 @@ function header() {
   (DATA.extra_facts || []).forEach(x => f.push([esc(x.label), `${esc(x.value)} <small>${esc(x.note || '')}</small>`]));
   $('#facts').innerHTML = f.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
   $('#foot').innerHTML = `<div>Injuries: ${esc(DATA.injuries)}. Model trained on games through ${esc(DATA.trained_through)}.</div>
-    <div>Stake: ${KELLY.frac}% of a full Kelly stake on a ${KELLY.bank}-unit bank, rounded to quarter units, never more than ${fmtU(KELLY.max)} units, and only when the price clears your minimum edge. Full Kelly assumes the model's chances are exact. They run hot (a typical bet shows about +10% here, while the backtest shows a few percent), which is why the fraction is small. Change all three at the top.</div>
+    <div>Stake: ${KELLY.frac}% of a full Kelly stake on a ${KELLY.bank}-unit bank, rounded to quarter units, never more than ${fmtU(KELLY.max)} units, and only when the price clears your minimum edge. Full Kelly assumes the model's chances are exact. They run hot (a typical bet shows about +15% here, while the backtest shows a few percent), which is why the fraction is small: at ${KELLY.frac}% a +15% bet at 1.90 comes to about ${fmtU(Math.min(Math.round(0.15 / 0.9 * KELLY.frac / 100 * KELLY.bank * 4) / 4, KELLY.max))} units. Change all three at the top.</div>
     <div>"Take at" is the lowest price worth betting: fair price plus your minimum edge. Value = the model's expected return at your price is at least that edge. Signal strength combines the backtest hit rate at this win %, how much of the evidence points the same way, and how much rides on doubtful players.</div>
     <div>Line and total strength: the model's chance for the side and line you pick, pushes left out. Strong is 60%+, Solid 56%+, Lean 53%+, and below that it's a toss-up. Set the calculator to your bookmaker's line to see how strongly the model disagrees with it; the backtest line under it shows how often the model's side actually won at the closing line with that much confidence. The "Strong and Solid" filter uses the head-to-head pick.</div>
     <div>Totals: the projected total is the model's own number for both teams' combined points (including overtime), built without any betting line. The over/under chances come from a curve calibrated on past games, so a line 1 point away from the projection moves the chance by only a few percent.</div>${DATA.foot_note ? `<div>${esc(DATA.foot_note)}</div>` : ''}${DATA.total_note ? `<div>${esc(DATA.total_note)}</div>` : ''}`;
