@@ -18,9 +18,9 @@
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0}[hidden]{display:none!important}</style>
 <script>
-// The predictions built into this page are from 2026-10-21T09:01:15Z. If the app has since fetched newer ones
+// The predictions built into this page are from 2026-10-21T09:11:47Z. If the app has since fetched newer ones
 // (saved below by the update check), start from those instead.
-window.__lbBuilt = '2026-10-21T09:01:15Z';
+window.__lbBuilt = '2026-10-21T09:11:47Z';
 window.__lbFresh = function () {
   try {
     var s = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null');
@@ -143,7 +143,7 @@ button, input, select { font: inherit; color: inherit; }
 .tabs button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* summary rail */
-.rail { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; }
+.rail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
 .panel h2 { font: 700 13px/1.2 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .bestlist { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -152,11 +152,6 @@ button, input, select { font: inherit; color: inherit; }
 .bestlist .what b { font-weight: 700; }
 .bestlist .what small { display: block; color: var(--muted); font-size: 12px; }
 .empty { color: var(--muted); font-size: 13px; margin: 0; }
-.facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; }
-.facts div { min-width: 0; }
-.facts dt { font-size: 12px; color: var(--muted); }
-.facts dd { margin: 0; font: 600 18px/1.2 var(--mono); font-variant-numeric: tabular-nums; }
-.facts dd small { font: 400 12px var(--body); color: var(--muted); }
 
 /* game card */
 .games { display: grid; gap: 18px; }
@@ -305,7 +300,6 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
   .ghead { grid-template-columns: minmax(0, 1fr); }
   .verdict { text-align: left; justify-items: start; }
   .drv { grid-template-columns: 96px minmax(0, 1fr) 48px; }
-  .facts { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: no-preference) { .bar span, .drv .fill { transition: width .25s ease; } }
 </style>
@@ -335,7 +329,6 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
   <div class="banner" id="banner" hidden></div>
   <div class="rail">
     <section class="panel" aria-labelledby="best-h"><h2 id="best-h">Best value from your prices</h2><ul class="bestlist" id="best"></ul></section>
-    <section class="panel" aria-labelledby="bt-h"><h2 id="bt-h">How the model has done</h2><dl class="facts" id="facts"></dl></section>
   </div>
   <div class="filter" id="filter">
     <input id="q" type="search" placeholder="Find a team" aria-label="Find a team" autocomplete="off">
@@ -506,18 +499,6 @@ function header() {
   const b = $('#banner');
   b.hidden = !DATA.early_season;
   if (DATA.early_season) b.innerHTML = `<b>Early season.</b> ${esc(DATA.early_text || 'Team ratings still lean on last season. In the backtest, rounds 1–4 were where the model did worst against the market, so treat big disagreements with the bookies with extra care.')}`;
-  const bt = DATA.backtest || {};
-  const f = [];
-  if (bt.model_logloss) f.push(['Log loss (lower is better)', `${bt.model_logloss.toFixed(3)} <small>market ${bt.market_logloss.toFixed(3)}</small>`]);
-  if (bt.stats_logloss) f.push(['Stats model alone', `${bt.stats_logloss.toFixed(3)} <small>log loss</small>`]);
-  if (bt.model_acc) f.push(['Picked the winner', `${pct(bt.model_acc, 1)} <small>market ${pct(bt.market_acc, 1)}</small>`]);
-  if (bt.roi_typical !== undefined && bt.roi_typical !== null) f.push(['ROI at typical prices', `${(bt.roi_typical >= 0 ? '+' : '') + pct(bt.roi_typical, 1)} <small>${bt.bets_typical} bets, not proven</small>`]);
-  const strong = (DATA.confidence || []).find(c => c.label === 'Strong');
-  if (strong) f.push(['70%+ picks won', `${pct(strong.won)} <small>${strong.games ? strong.games + ' games' : 'backtest'}</small>`]);
-  if (bt.total_mae) f.push(['Total points, average miss', `${bt.total_mae.toFixed(1)} <small>${bt.market_total_mae ? 'market ' + bt.market_total_mae.toFixed(1) : 'points'}</small>`]);
-  if (bt.roi_total !== undefined && bt.roi_total !== null) f.push(['Over/under bets (backtest)', `${(bt.roi_total >= 0 ? '+' : '') + pct(bt.roi_total, 1)} <small>${bt.bets_total} bets, not proven</small>`]);
-  (DATA.extra_facts || []).forEach(x => f.push([esc(x.label), `${esc(x.value)} <small>${esc(x.note || '')}</small>`]));
-  $('#facts').innerHTML = f.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
   $('#foot').innerHTML = `<div>Injuries: ${esc(DATA.injuries)}. Model trained on games through ${esc(DATA.trained_through)}.</div>
     <div>Stake: ${KELLY.frac}% of a full Kelly stake on a ${KELLY.bank}-unit bank, rounded to quarter units, never more than ${fmtU(KELLY.max)} units, and only when the price clears your minimum edge. Full Kelly assumes the model's chances are exact. They run hot (a typical bet shows about +15% here, while the backtest shows a few percent), which is why the fraction is small: at ${KELLY.frac}% a +15% bet at 1.90 comes to about ${fmtU(Math.min(Math.round(0.15 / 0.9 * KELLY.frac / 100 * KELLY.bank * 4) / 4, KELLY.max))} units. Change all three at the top.</div>
     <div>"Take at" is the lowest price worth betting: fair price plus your minimum edge. Value = the model's expected return at your price is at least that edge. Signal strength combines the backtest hit rate at this win %, how much of the evidence points the same way, and how much rides on doubtful players.</div>
