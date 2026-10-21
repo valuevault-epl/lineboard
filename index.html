@@ -18,9 +18,9 @@
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0}[hidden]{display:none!important}</style>
 <script>
-// The predictions built into this page are from 2026-10-21T14:03:39Z. If the app has since fetched newer ones
+// The predictions built into this page are from 2026-10-21T14:09:11Z. If the app has since fetched newer ones
 // (saved below by the update check), start from those instead.
-window.__lbBuilt = '2026-10-21T14:03:39Z';
+window.__lbBuilt = '2026-10-21T14:09:11Z';
 window.__lbFresh = function () {
   try {
     var s = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null');
@@ -321,9 +321,9 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
     <div class="controls">
       <div class="edge"><label for="edge">Minimum edge</label><input id="edge" type="number" min="0" max="30" step="0.5" inputmode="decimal"><span class="small">%</span></div>
       <div class="edge stakeset" title="Stakes are these percentages of a full Kelly stake (head to head, lines, totals - remembered separately for each sport), on a bank of this many units, never more than the max">
-        <label for="kh2h">Kelly H2H</label><input id="kh2h" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
-        <label for="kline">Lines</label><input id="kline" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
-        <label for="ktot">Totals</label><input id="ktot" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
+        <label for="kh2h">Kelly H2H</label><input id="kh2h" type="number" min="0" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
+        <label for="kline">Lines</label><input id="kline" type="number" min="0" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
+        <label for="ktot">Totals</label><input id="ktot" type="number" min="0" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
         <label for="kmax">Max</label><input id="kmax" type="number" min="0.25" max="20" step="0.25" inputmode="decimal"><span class="small">u</span>
         <label for="kbank">Bank</label><input id="kbank" type="number" min="10" max="10000" step="10" inputmode="decimal"><span class="small">u</span>
       </div>
@@ -464,8 +464,10 @@ const KELLY_DEFAULT = { frac: 7.5, max: 3, bank: 100 };
 // Kelly % for each sport and market (head to head, lines, totals), remembered separately per sport. Defaults set
 // 22 Oct 2026 from the backtests: the NBL model's head-to-head and opening-line totals edges held up (77% / 59% of
 // the claimed value was real) so they stake 10%, NBL lines (19%) 7.5%. NFL: 10% on every market (user's choice for
-// the most units: weeks 1-9 +39u/season vs +31u at 7.5%, worst drawdown 32u vs 23u). NBA and CFB stay at 7.5%.
-const KELLY_LEAGUE = { nbl: { h2h: 10, total: 10 }, nfl: { h2h: 10, line: 10, total: 10 } };
+// the most units: weeks 1-9 +39u/season vs +31u at 7.5%, worst drawdown 32u vs 23u). NBA stays at 7.5%. CFB head to
+// head is OFF (0%): at ESPN's closing moneylines it lost money at every stats weighting tested (2023-26); CFB lines and
+// totals stay at 7.5%. A 0% market shows "no stake"; type a number in the box to switch it back on.
+const KELLY_LEAGUE = { nbl: { h2h: 10, total: 10 }, nfl: { h2h: 10, line: 10, total: 10 }, cfb: { h2h: 0 } };
 const KELLY = { max: +store.get('kmax', KELLY_DEFAULT.max), bank: +store.get('kbank', KELLY_DEFAULT.bank),
                 h2h: KELLY_DEFAULT.frac, line: KELLY_DEFAULT.frac, total: KELLY_DEFAULT.frac };
 const KMARKETS = [['kh2h', 'h2h'], ['kline', 'line'], ['ktot', 'total']];
@@ -475,6 +477,7 @@ function loadKelly() {
 }
 // What the backtests (2019-26, 22 Oct 2026) say to bet in each sport - shown under "Best value"
 const PLAYBOOK = {
+  cfb: 'Backtested approach (2023-26): no head-to-head bets - they lost money at every weighting, so their stakes are off. Lines and totals with a 7%+ edge at 7.5% Kelly made a few units a season but swung a lot from year to year: keep CFB stakes small.',
   nfl: 'Backtested approach: weeks 1-9 only - head-to-head, lines and totals with a 7%+ edge at 10% Kelly. From week 10 the win % follows the price (every stats weighting lost money late in the season), so expect almost no bets.',
   nba: 'Backtested approach: head-to-head and lines with a 7%+ edge (set Minimum edge to 7) at the best price you can find, 7.5% Kelly. Skip NBA totals: no weighting made them profitable.',
   nbl: 'Backtested approach: head-to-head and lines close to tip-off (after team news) with a 7%+ edge, head-to-head at 10% Kelly and lines at 7.5%. Totals only when the line first goes up (see each game\'s totals note), at 10%; skip them near tip-off.',
@@ -487,6 +490,7 @@ function kelly(q, odds, market = 'h2h') {
   const b = odds - 1, l = Math.max(0, 1 - q.win - q.push);
   const full = (q.win * b - l) / b;                       // share of the bank at full Kelly
   const e = ev(q, odds);
+  if (!(frac > 0)) return { units: 0, full, frac, why: 'stakes are off for this market (it lost money in the backtest; set a Kelly % at the top to switch it on)' };
   if (e < EDGE || full <= 0) return { units: 0, full, frac, why: e < 0 ? 'no value at this price' : 'below your minimum edge' };
   const raw = full * frac / 100 * KELLY.bank;
   const units = Math.min(Math.round(raw * 4) / 4, KELLY.max);
@@ -1005,7 +1009,7 @@ KMARKETS.forEach(([id, m]) => {                     // Kelly % per market, saved
   const el = $('#' + id);
   el.addEventListener('input', () => {
     const v = parseFloat(el.value);
-    if (!isFinite(v) || v < 1 || v > 100) return;
+    if (!isFinite(v) || v < 0 || v > 100) return;          // 0 = no stakes on this market
     KELLY[m] = v; store.set(`${LEAGUE}:k_${m}`, v); refreshEdge(); header();
   });
 });
