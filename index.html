@@ -18,9 +18,9 @@
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0}[hidden]{display:none!important}</style>
 <script>
-// The predictions built into this page are from 2026-10-21T13:01:14Z. If the app has since fetched newer ones
+// The predictions built into this page are from 2026-10-21T13:40:28Z. If the app has since fetched newer ones
 // (saved below by the update check), start from those instead.
-window.__lbBuilt = '2026-10-21T13:01:14Z';
+window.__lbBuilt = '2026-10-21T13:40:28Z';
 window.__lbFresh = function () {
   try {
     var s = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null');
@@ -152,6 +152,7 @@ button, input, select { font: inherit; color: inherit; }
 .bestlist .what b { font-weight: 700; }
 .bestlist .what small { display: block; color: var(--muted); font-size: 12px; }
 .empty { color: var(--muted); font-size: 13px; margin: 0; }
+.playbook { margin: -4px 0 10px; color: var(--ink); }
 
 /* game card */
 .games { display: grid; gap: 18px; }
@@ -319,8 +320,10 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
     </div>
     <div class="controls">
       <div class="edge"><label for="edge">Minimum edge</label><input id="edge" type="number" min="0" max="30" step="0.5" inputmode="decimal"><span class="small">%</span></div>
-      <div class="edge stakeset" title="Stakes are this percentage of a full Kelly stake, on a bank of this many units, never more than the max">
-        <label for="kfrac">Kelly</label><input id="kfrac" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
+      <div class="edge stakeset" title="Stakes are these percentages of a full Kelly stake (head to head, lines, totals - remembered separately for each sport), on a bank of this many units, never more than the max">
+        <label for="kh2h">Kelly H2H</label><input id="kh2h" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
+        <label for="kline">Lines</label><input id="kline" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
+        <label for="ktot">Totals</label><input id="ktot" type="number" min="1" max="100" step="0.5" inputmode="decimal"><span class="small">%</span>
         <label for="kmax">Max</label><input id="kmax" type="number" min="0.25" max="20" step="0.25" inputmode="decimal"><span class="small">u</span>
         <label for="kbank">Bank</label><input id="kbank" type="number" min="10" max="10000" step="10" inputmode="decimal"><span class="small">u</span>
       </div>
@@ -328,7 +331,7 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
   </header>
   <div class="banner" id="banner" hidden></div>
   <div class="rail">
-    <section class="panel" aria-labelledby="best-h"><h2 id="best-h">Best value from your prices</h2><ul class="bestlist" id="best"></ul></section>
+    <section class="panel" aria-labelledby="best-h"><h2 id="best-h">Best value from your prices</h2><p class="small playbook" id="playbook" hidden></p><ul class="bestlist" id="best"></ul></section>
   </div>
   <div class="filter" id="filter">
     <input id="q" type="search" placeholder="Find a team" aria-label="Find a team" autocomplete="off">
@@ -443,9 +446,9 @@ const leanText = (name, s) => s.bars === 0 ? '—' : `<span class="lean"><b>${es
 const fairOdds = q => q.win > 0 ? (1 - q.push) / q.win : Infinity;
 const takeOdds = q => q.win > 0 ? (1 + EDGE - q.push) / q.win : Infinity;
 const ev = (q, odds) => q.win * odds + q.push - 1;
-function verdict(q, odds) {
+function verdict(q, odds, market = 'h2h') {
   if (!(odds > 1)) return { cls: 'none', text: 'Enter a price', ev: null };
-  const e = ev(q, odds), k = kelly(q, odds);
+  const e = ev(q, odds), k = kelly(q, odds, market);
   if (e >= EDGE) return { cls: 'good', text: 'Value', ev: e, k };
   if (e >= 0) return { cls: 'warn', text: 'Too thin', ev: e, k };
   return { cls: 'bad', text: 'No value', ev: e, k };
@@ -458,35 +461,50 @@ function verdict(q, odds) {
 // 1.25 units, +10% to 0.75, +20% to 1.75. Stakes round to quarter units, never pass the max, and are
 // only given when the bet clears the minimum edge.
 const KELLY_DEFAULT = { frac: 7.5, max: 3, bank: 100 };
-const KELLY = {
-  frac: +store.get('kfrac', KELLY_DEFAULT.frac), max: +store.get('kmax', KELLY_DEFAULT.max), bank: +store.get('kbank', KELLY_DEFAULT.bank)
+// Kelly % for each sport and market (head to head, lines, totals), remembered separately per sport. Defaults set
+// 22 Oct 2026 from the backtests: the NBL model's head-to-head and opening-line totals edges held up (77% / 59% of
+// the claimed value was real) so they stake 10%; NBL lines (19%) and every NBA/NFL/CFB market stay at 7.5%.
+const KELLY_LEAGUE = { nbl: { h2h: 10, total: 10 } };
+const KELLY = { max: +store.get('kmax', KELLY_DEFAULT.max), bank: +store.get('kbank', KELLY_DEFAULT.bank),
+                h2h: KELLY_DEFAULT.frac, line: KELLY_DEFAULT.frac, total: KELLY_DEFAULT.frac };
+const KMARKETS = [['kh2h', 'h2h'], ['kline', 'line'], ['ktot', 'total']];
+function loadKelly() {
+  const d = Object.assign({ h2h: KELLY_DEFAULT.frac, line: KELLY_DEFAULT.frac, total: KELLY_DEFAULT.frac }, KELLY_LEAGUE[LEAGUE] || {});
+  KMARKETS.forEach(([id, m]) => { KELLY[m] = +store.get(`${LEAGUE}:k_${m}`, d[m]); const el = $('#' + id); if (el) el.value = KELLY[m]; });
+}
+// What the backtests (2019-26, 22 Oct 2026) say to bet in each sport - shown under "Best value"
+const PLAYBOOK = {
+  nba: 'Backtested approach: head-to-head and lines with a 7%+ edge (set Minimum edge to 7) at the best price you can find, 7.5% Kelly. Skip NBA totals: no weighting made them profitable.',
+  nbl: 'Backtested approach: head-to-head and lines close to tip-off (after team news) with a 7%+ edge, head-to-head at 10% Kelly and lines at 7.5%. Totals only when the line first goes up (see each game\'s totals note), at 10%; skip them near tip-off.',
 };
+const stakeMarket = attr => String(attr).startsWith('h2h') ? 'h2h' : attr === 'alt' ? 'line' : attr === 'tot' ? 'total' : 'h2h';
 const fmtU = u => (Math.round(u * 100) / 100).toString();
-function kelly(q, odds) {
+function kelly(q, odds, market = 'h2h') {
   if (!(odds > 1)) return null;
+  const frac = KELLY[market] ?? KELLY_DEFAULT.frac;
   const b = odds - 1, l = Math.max(0, 1 - q.win - q.push);
   const full = (q.win * b - l) / b;                       // share of the bank at full Kelly
   const e = ev(q, odds);
-  if (e < EDGE || full <= 0) return { units: 0, full, why: e < 0 ? 'no value at this price' : 'below your minimum edge' };
-  const raw = full * KELLY.frac / 100 * KELLY.bank;
+  if (e < EDGE || full <= 0) return { units: 0, full, frac, why: e < 0 ? 'no value at this price' : 'below your minimum edge' };
+  const raw = full * frac / 100 * KELLY.bank;
   const units = Math.min(Math.round(raw * 4) / 4, KELLY.max);
-  return { units, full, capped: raw > KELLY.max, why: units === 0 ? 'the Kelly stake is under a quarter unit' : '' };
+  return { units, full, frac, capped: raw > KELLY.max, why: units === 0 ? 'the Kelly stake is under a quarter unit' : '' };
 }
-function stakeHTML(q, odds) {
-  const k = kelly(q, odds);
+function stakeHTML(q, odds, market = 'h2h') {
+  const k = kelly(q, odds, market);
   if (!k) return '<b>—</b><small>stake</small>';
   if (k.units <= 0) return '<b>0u</b><small>no bet</small>';
   return `<b>${fmtU(k.units)}u</b><small>${k.capped ? 'max stake' : 'stake'}</small>`;
 }
 function setStake(el, q, odds) {
   if (!el) return;
-  const k = kelly(q, odds);
+  const m = stakeMarket(el.dataset.stake), k = kelly(q, odds, m);
   el.className = 'stake' + (k && k.units > 0 ? ' on' : '');
-  el.innerHTML = stakeHTML(q, odds);
+  el.innerHTML = stakeHTML(q, odds, m);
 }
 function stakeBox(attr, q, odds) {
-  const k = kelly(q, odds);
-  return `<span class="stake${k && k.units > 0 ? ' on' : ''}" data-stake="${attr}" aria-live="polite">${stakeHTML(q, odds)}</span>`;
+  const m = stakeMarket(attr), k = kelly(q, odds, m);
+  return `<span class="stake${k && k.units > 0 ? ' on' : ''}" data-stake="${attr}" aria-live="polite">${stakeHTML(q, odds, m)}</span>`;
 }
 const lineLabel = h => (h > 0 ? '+' : h < 0 ? '−' : '') + Math.abs(h).toFixed(Math.abs(h % 1) > 0 ? 1 : 0);
 const sigBars = n => `<span class="sig" aria-label="Signal ${n} of 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</span>`;
@@ -496,11 +514,14 @@ function header() {
   $('#h1').innerHTML = `${esc(DATA.league || 'NBL')} <span>Line</span> Board`;
   $('#sub').textContent = `${DATA.subtitle || 'Win chances and minimum prices from team stats, player stats, injuries, schedule and what each team has to play for. No betting odds are used.'} Updated ${DATA.generated}.`;
   $('#edge').value = +(EDGE * 100).toFixed(2);
+  const pb = $('#playbook');
+  pb.hidden = !PLAYBOOK[LEAGUE];
+  pb.textContent = PLAYBOOK[LEAGUE] || '';
   const b = $('#banner');
   b.hidden = !DATA.early_season;
   if (DATA.early_season) b.innerHTML = `<b>Early season.</b> ${esc(DATA.early_text || 'Team ratings still lean on last season. In the backtest, rounds 1–4 were where the model did worst against the market, so treat big disagreements with the bookies with extra care.')}`;
   $('#foot').innerHTML = `<div>Injuries: ${esc(DATA.injuries)}. Model trained on games through ${esc(DATA.trained_through)}.</div>
-    <div>Stake: ${KELLY.frac}% of a full Kelly stake on a ${KELLY.bank}-unit bank, rounded to quarter units, never more than ${fmtU(KELLY.max)} units, and only when the price clears your minimum edge. Full Kelly assumes the model's chances are exact. They run hot (a typical bet shows about +15% here, while the backtest shows a few percent), which is why the fraction is small: at ${KELLY.frac}% a +15% bet at 1.90 comes to about ${fmtU(Math.min(Math.round(0.15 / 0.9 * KELLY.frac / 100 * KELLY.bank * 4) / 4, KELLY.max))} units. Change all three at the top.</div>
+    <div>Stake: a share of a full Kelly stake on a ${KELLY.bank}-unit bank (${DATA.league || LEAGUE.toUpperCase()}: head to head ${KELLY.h2h}%, lines ${KELLY.line}%, totals ${KELLY.total}%), rounded to quarter units, never more than ${fmtU(KELLY.max)} units, and only when the price clears your minimum edge. Full Kelly assumes the model's chances are exact. They run hot (a typical bet shows about +15% here, while the backtest shows a few percent), which is why the shares are small: at ${KELLY.h2h}% a +15% bet at 1.90 comes to about ${fmtU(Math.min(Math.round(0.15 / 0.9 * KELLY.h2h / 100 * KELLY.bank * 4) / 4, KELLY.max))} units. Each sport remembers its own Kelly percentages; the bank and max are shared. Change them at the top.</div>
     <div>"Take at" is the lowest price worth betting: fair price plus your minimum edge. Value = the model's expected return at your price is at least that edge. Signal strength combines the backtest hit rate at this win %, how much of the evidence points the same way, and how much rides on doubtful players.</div>
     <div>Line and total strength: the model's chance for the side and line you pick, pushes left out. Strong is 60%+, Solid 56%+, Lean 53%+, and below that it's a toss-up. Set the calculator to your bookmaker's line to see how strongly the model disagrees with it; the backtest line under it shows how often the model's side actually won at the closing line with that much confidence. The "Strong and Solid" filter uses the head-to-head pick.</div>
     <div>Totals: the projected total is the model's own number for both teams' combined points (including overtime), built without any betting line. The over/under chances come from a curve calibrated on past games, so a line 1 point away from the projection moves the chance by only a few percent.</div>${DATA.foot_note ? `<div>${esc(DATA.foot_note)}</div>` : ''}${DATA.total_note ? `<div>${esc(DATA.total_note)}</div>` : ''}`;
@@ -536,7 +557,7 @@ function valueHTML(v, odds) {
   if (v.ev === null) return `<span class="chip none">${v.text}</span>`;
   const k = v.k;
   const stake = !k ? '' : k.units > 0
-    ? `<span>Stake ${fmtU(k.units)}u: ${KELLY.frac}% of the full Kelly stake (${pct(k.full, 1)} of a ${KELLY.bank}u bank)${k.capped ? `, capped at your ${fmtU(KELLY.max)}u max` : ''}.</span>`
+    ? `<span>Stake ${fmtU(k.units)}u: ${k.frac}% of the full Kelly stake (${pct(k.full, 1)} of a ${KELLY.bank}u bank)${k.capped ? `, capped at your ${fmtU(KELLY.max)}u max` : ''}.</span>`
     : `<span>No stake: ${k.why}.</span>`;
   return `<span class="chip ${v.cls}">${v.text}</span><span>Expected return ${(v.ev >= 0 ? '+' : '') + pct(v.ev, 1)} · your price implies ${pct(1 / odds)}</span>${stake}`;
 }
@@ -607,7 +628,7 @@ function renderAlt(card, gm) {
       <div class="take"><dt>Take at</dt><dd>${fmtOdds(takeOdds(q))}</dd></div></dl>
     <p class="small" style="margin:6px 0 0">${st.line === 0 ? `${esc(s.short)} must win` : st.line < 0 ? `${esc(s.short)} must win by ${Math.floor(-st.line) + 1}+` : `${esc(s.short)} can lose by up to ${Math.ceil(st.line) - 1}`}${q.push > 0 ? ` (exactly ${Math.abs(st.line)} is a push)` : ''}. Fails ${pct(loss, 1)} of the time.</p>
     ${strengthHTML(lineStrength(q, DATA.line_bands, gm.signal.uncertain), 'line')}`;
-  const v = verdict(q, +st.odds);
+  const v = verdict(q, +st.odds, 'line');
   $('[data-altval]', card).innerHTML = valueHTML(v, +st.odds);
   setStake($('[data-stake="alt"]', card), q, +st.odds);
   $('[data-dist]', card).innerHTML = distSVG(mu, gm.sigma, -st.line, st.side === 'home' ? 'var(--home)' : 'var(--away)');
@@ -676,7 +697,7 @@ function renderTot(card, gm) {
       <div class="take"><dt>Take at</dt><dd>${fmtOdds(takeOdds(q))}</dd></div></dl>
     <p class="small" style="margin:6px 0 0">Needs ${need}${whole ? ` (exactly ${L} is a push)` : ''}. Fails ${pct(1 - q.win - q.push, 1)} of the time.</p>
     ${strengthHTML(lineStrength(q, DATA.total_bands, gm.signal.uncertain), 'total')}`;
-  $('[data-totval]', card).innerHTML = valueHTML(verdict(q, +st.odds), +st.odds);
+  $('[data-totval]', card).innerHTML = valueHTML(verdict(q, +st.odds, 'total'), +st.odds);
   setStake($('[data-stake="tot"]', card), q, +st.odds);
   $('[data-tdist]', card).innerHTML = distSVG(gm.total, gm.total_sigma, L, st.side === 'over' ? 'var(--over)' : 'var(--under)', st.side === 'over', false, 'Spread of likely totals with the selected line');
 }
@@ -786,7 +807,7 @@ function cardHTML(gm) {
 }
 
 function stakeTag(i) {
-  const k = kelly(i.q, i.odds);
+  const k = kelly(i.q, i.odds, i.market || 'h2h');
   return k && k.units > 0 ? ` · ${fmtU(k.units)}u` : '';
 }
 function best() {
@@ -799,13 +820,13 @@ function best() {
     const st = store.get(`${gm.id}:alt`, null);
     if (st && +st.odds > 1) {
       const mu = st.side === 'home' ? gm.margin : -gm.margin, q = lineProb(mu, gm.sigma, st.line);
-      items.push({ gm, q, what: `${gm[st.side].short} ${lineLabel(st.line)}`, odds: +st.odds, e: ev(q, +st.odds), p: q.win,
+      items.push({ gm, q, market: 'line', what: `${gm[st.side].short} ${lineLabel(st.line)}`, odds: +st.odds, e: ev(q, +st.odds), p: q.win,
                    bars: lineStrength(q, DATA.line_bands, gm.signal.uncertain).bars });
     }
     const tt = hasTot(gm) ? store.get(`${gm.id}:tot`, null) : null;
     if (tt && +tt.odds > 1) {
       const q = totProb(gm.total, gm.total_sigma, tt.line, tt.side);
-      items.push({ gm, q, what: totLabel(tt.side, tt.line), odds: +tt.odds, e: ev(q, +tt.odds), p: q.win,
+      items.push({ gm, q, market: 'total', what: totLabel(tt.side, tt.line), odds: +tt.odds, e: ev(q, +tt.odds), p: q.win,
                    bars: lineStrength(q, DATA.total_bands, gm.signal.uncertain).bars });
     }
   }
@@ -969,13 +990,21 @@ $('#edge').addEventListener('input', e => {
   if (!isFinite(v) || v < 0 || v > 50) return;
   EDGE = v / 100; store.set('edge', v); refreshEdge();
 });
-[['kfrac', 'frac', 1, 100], ['kmax', 'max', 0.25, 20], ['kbank', 'bank', 10, 10000]].forEach(([id, key, lo, hi]) => {
+[['kmax', 'max', 0.25, 20], ['kbank', 'bank', 10, 10000]].forEach(([id, key, lo, hi]) => {
   const el = $('#' + id);
   el.value = KELLY[key];
   el.addEventListener('input', () => {
     const v = parseFloat(el.value);
     if (!isFinite(v) || v < lo || v > hi) return;
     KELLY[key] = v; store.set(id, v); refreshEdge(); header();
+  });
+});
+KMARKETS.forEach(([id, m]) => {                     // Kelly % per market, saved for the sport on screen
+  const el = $('#' + id);
+  el.addEventListener('input', () => {
+    const v = parseFloat(el.value);
+    if (!isFinite(v) || v < 1 || v > 100) return;
+    KELLY[m] = v; store.set(`${LEAGUE}:k_${m}`, v); refreshEdge(); header();
   });
 });
 function setLeague(k) {
@@ -985,6 +1014,7 @@ function setLeague(k) {
   document.documentElement.dataset.league = k;
   document.querySelectorAll('.tabs [data-league]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.league === k)));
   store.set('league', k);
+  loadKelly();
   header();
   render();
 }
