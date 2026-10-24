@@ -167,7 +167,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
   </footer>
 </div>
 
-<script>
+<script id="main">
 'use strict';
 // ---- set-up -------------------------------------------------------------------------------------
 const BOOKS = [['tab', 'TAB'], ['sportsbet', 'Sportsbet'], ['betfair_ex_au', 'Betfair'], ['pointsbetau', 'PointsBet'], ['ladbrokes_au', 'Ladbrokes'], ['neds', 'Neds']];
@@ -665,7 +665,9 @@ function fillBoard() {
 }
 
 // ---- the button -----------------------------------------------------------------------------------
+let BUSY = false;
 async function go() {
+  BUSY = true;
   const key = keyNow(), status = $('#status');
   status.className = 'status';
   if (!key) { status.className = 'status err'; status.textContent = 'Add your Odds API key in Settings first.'; $('#settings').open = true; $('#key').focus(); return; }
@@ -719,7 +721,7 @@ async function go() {
   } catch (e) {
     status.className = 'status err'; status.textContent = e.message || 'Something went wrong.';
   } finally {
-    $('#go').textContent = 'Get current odds'; showCost();
+    $('#go').textContent = 'Get current odds'; showCost(); BUSY = false;
   }
 }
 
@@ -749,6 +751,32 @@ async function go() {
   if (pending && pending.id && Date.now() - pending.at < REFRESH_WAIT) waitForRefresh(pending);
 })();
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+
+// ---- stay current -----------------------------------------------------------------------------------
+// A home-screen app can sit open in the background for days, running an old copy of this page. On opening and
+// whenever it comes back to the screen, compare this page's code with the published one (raw GitHub, which the
+// service worker doesn't touch) and reload into the new version: at most every 10 minutes, never mid-check.
+(function stayCurrent() {
+  const SRC = 'https://raw.githubusercontent.com/valuevault-epl/lineboard/main/value.html';
+  let last = 0;
+  async function check() {
+    if (location.protocol !== 'https:' || Date.now() - last < 10 * 60e3) return;
+    last = Date.now();
+    try {
+      const r = await fetch(SRC + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const theirs = new DOMParser().parseFromString(await r.text(), 'text/html').getElementById('main');
+      if (!theirs || theirs.textContent === $('#main').textContent || BUSY) return;
+      let prev = 0;
+      try { prev = +sessionStorage.getItem('lineboard:odds:reloaded') || 0; } catch (e) {}
+      if (Date.now() - prev < 10 * 60e3) return;           // the website may not have the new copy yet
+      try { sessionStorage.setItem('lineboard:odds:reloaded', String(Date.now())); } catch (e) {}
+      location.reload();
+    } catch (e) {}
+  }
+  check();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+})();
 </script>
 </body>
 </html>
