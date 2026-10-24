@@ -154,6 +154,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
           <span class="small">The same setting as on the board. A price counts as value when the model's expected return is at least this.</span>
         </label>
         <label class="inline"><input id="fill" type="checkbox"> Copy the best prices into the board's price boxes</label>
+        <div class="small" id="pagecode"></div>
       </div>
     </details>
   </section>
@@ -193,7 +194,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pct = (p, d = 0) => (p * 100).toFixed(d) + '%';
 const fmtOdds = o => (isFinite(o) && o > 1 && o < 1000) ? o.toFixed(2) : '—';
-const signed = (x, d = 1) => (x >= 0 ? '+' : '') + (x * 100).toFixed(d) + '%';
+const signed = (x, d = 1) => { const v = +(x * 100).toFixed(d); return (v >= 0 ? '+' : '') + v.toFixed(d) + '%'; };   // never "-0.0%"
 const lineLabel = h => (h > 0 ? '+' : h < 0 ? '−' : '') + Math.abs(h).toFixed(Math.abs(h % 1) > 0 ? 1 : 0);
 // The board's own saved settings and prices (same keys, so both pages stay in step)
 const store = {
@@ -646,6 +647,7 @@ const rerender = () => render();
 function fillBoard() {
   let n = 0;
   const bookName = o => BOOK_NAME[o.book] + (o.book === 'betfair_ex_au' ? ' (after commission)' : '');
+  const altOf = r => r.alt ? { name: bookName(r.alt), line: r.alt.point, odds: r.alt.eff.toFixed(2) } : null;
   for (const lg of Object.keys(LAST.leagues)) {
     for (const G of LAST.leagues[lg].games) {
       const g = G.g; if (Date.parse(g.tip_iso) <= Date.now()) continue;
@@ -653,10 +655,10 @@ function fillBoard() {
       // the bookmaker is saved with each price, so the board can say where it came from
       best.filter(r => r.market === 'h2h').forEach(r => {
         const odds = r.top.eff.toFixed(2);
-        store.set(`${g.id}:h2h:${r.side}`, odds); store.set(`${g.id}:h2h:${r.side}:book`, { name: bookName(r.top), odds }); n++;
+        store.set(`${g.id}:h2h:${r.side}`, odds); store.set(`${g.id}:h2h:${r.side}:book`, { name: bookName(r.top), odds, alt: altOf(r) }); n++;
       });
       const pick = m => best.filter(r => r.market === m).sort((a, b) => b.top.ev - a.top.ev)[0];
-      const put = (k, r) => { const st = { side: r.side, line: r.top.point, odds: r.top.eff.toFixed(2) }; store.set(`${g.id}:${k}`, Object.assign({ book: Object.assign({ name: bookName(r.top) }, st) }, st)); n++; };
+      const put = (k, r) => { const st = { side: r.side, line: r.top.point, odds: r.top.eff.toFixed(2) }; store.set(`${g.id}:${k}`, Object.assign({ book: Object.assign({ name: bookName(r.top), alt: altOf(r) }, st) }, st)); n++; };
       const ln = pick('line'); if (ln) put('alt', ln);
       const tt = pick('total'); if (tt) put('tot', tt);
     }
@@ -738,6 +740,11 @@ async function go() {
   history.replaceState(null, '', location.pathname + location.search);
 })();
 (async function start() {
+  // a short code for this version of the page, to check the phone has the latest
+  let h = 2166136261;
+  for (const c of $('#main').textContent) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619); }
+  $('#pagecode').textContent = 'Page version ' + (h >>> 0).toString(16).padStart(8, '0').slice(0, 6);
+  if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
   wireSettings();
   showKeys();
   $('#go').addEventListener('click', go);
