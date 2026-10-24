@@ -74,6 +74,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .form .inline { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .form .inline input { width: auto; }
 .form .num { max-width: 120px; }
+.pastebtn { justify-self: start; font: 600 14px/1 var(--body); padding: 11px 14px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); color: var(--ink); cursor: pointer; }
 .league { display: grid; gap: 12px; }
 .league-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
 .league-h h2 { color: var(--lc, var(--accent)); }
@@ -131,6 +132,8 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
     <details class="settings" id="settings">
       <summary>Settings</summary>
       <div class="form">
+        <button type="button" class="pastebtn" id="pastesetup">Paste keys from clipboard</button>
+        <span class="small" id="setupmsg">Copy your Odds API keys and GitHub token (any text containing them, even the setup link), then tap this. The home-screen app keeps its own storage, separate from Safari, so set the keys up here inside the app.</span>
         <label>Odds API key(s)
           <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key from the-odds-api.com">
           <span class="small">Key from <a href="https://the-odds-api.com" target="_blank" rel="noopener">the-odds-api.com</a> (500 credits a month on the free plan). To use more than one, separate them with commas: the page uses the first key until it runs out of credits, then moves to the next. Saved on this phone only, never added to the website.</span>
@@ -306,11 +309,33 @@ function showCost() {
   $('#cost').textContent = n ? `This check uses ${n} credit${n > 1 ? 's' : ''}` : 'Pick at least one league and one market';
   $('#go').disabled = !n;
 }
+// Any text holding the keys works (the setup link, a message, both on separate lines): Odds API keys are 32 hex
+// characters, GitHub fine-grained tokens start github_pat_.
+function applySetup(text) {
+  const gh = (String(text).match(/github_pat_[A-Za-z0-9_]{20,}/) || [])[0];
+  const keys = [...new Set((String(text).replace(/github_pat_[A-Za-z0-9_]+/g, ' ').match(/\b[0-9a-f]{32}\b/gi) || []).map(k => k.toLowerCase()))];
+  try {
+    if (keys.length) localStorage.setItem('lineboard:odds:apikey', keys.join(','));
+    if (gh) localStorage.setItem('lineboard:refresh:token', gh);
+  } catch (e) { return 'This phone wouldn\'t let the page save them (private browsing?).'; }
+  $('#key').value = keyNow(); $('#ghtoken').value = ghNow(); showKeys();
+  if (!keys.length && !gh) return 'No keys found in what you copied.';
+  return 'Saved ' + [keys.length ? `${keys.length} Odds API key${keys.length > 1 ? 's' : ''}` : '', gh ? 'the GitHub refresh token' : ''].filter(Boolean).join(' and ') + '.';
+}
 function wireSettings() {
   const key = $('#key'), comm = $('#comm'), edge = $('#edge'), fill = $('#fill');
+  $('#pastesetup').addEventListener('click', async () => {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); }
+    catch (e) { $('#setupmsg').textContent = 'The phone didn\'t allow reading the clipboard. Paste into the boxes below instead (all of it can go in the first box).'; return; }
+    $('#setupmsg').textContent = applySetup(text);
+  });
   key.value = keyNow();
   if (!key.value) $('#settings').open = true;
-  key.addEventListener('input', () => { try { localStorage.setItem('lineboard:odds:apikey', key.value.trim()); } catch (e) {} showKeys(); });
+  key.addEventListener('input', () => {
+    if (/github_pat_|#|=/.test(key.value)) { $('#setupmsg').textContent = applySetup(key.value); return; }
+    try { localStorage.setItem('lineboard:odds:apikey', key.value.trim()); } catch (e) {} showKeys();
+  });
   $('#showkey').addEventListener('change', e => { key.type = e.target.checked ? 'text' : 'password'; });
   const gh = $('#ghtoken');
   gh.value = ghNow();
