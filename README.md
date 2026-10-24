@@ -23,7 +23,7 @@ To stop the automatic push, set the environment variable `LINEBOARD_NO_PUSH=1` b
 ## Odds check (value.html)
 https://valuevault-epl.github.io/lineboard/value.html
 
-One button pulls current prices from TAB, Sportsbet, Betfair (after commission), PointsBet, Ladbrokes and Neds through The Odds API, and checks every head to head, line and total against the board's numbers, using the same maths and the same minimum edge and Kelly settings. It only calls the API when you tap (about 1 credit per league per market; the free plan has 500 a month). The API key is typed into the page and saved on the phone only. By default it also copies the best prices into the board's price boxes, so the board's own value chips and stakes light up.
+One button pulls current prices from TAB, Sportsbet, Betfair (after commission), PointsBet, Ladbrokes and Neds through The Odds API, and checks every head to head, line and total against the board's numbers, using the same maths and the same minimum edge and Kelly settings. It only calls the API when you tap (about 1 credit per league per market; the free plan has 500 a month). The API key is typed into the page and saved on the phone only. Several keys can be saved, separated by commas: they are used in order, and when one runs out of credits (or isn't accepted) the page moves on to the next by itself. Settings shows each key's credits left this month. Opening `value.html#keys=KEY1,KEY2` on the phone saves the keys in one tap (the part after `#` never reaches the website) and then clears them from the address bar. By default it also copies the best prices into the board's price boxes, so the board's own value chips and stakes light up.
 
 `site_builder.py` doesn't touch this file, so model runs won't overwrite it.
 

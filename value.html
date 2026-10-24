@@ -127,11 +127,12 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
     <details class="settings" id="settings">
       <summary>Settings</summary>
       <div class="form">
-        <label>Odds API key
+        <label>Odds API key(s)
           <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key from the-odds-api.com">
-          <span class="small">Free key at <a href="https://the-odds-api.com" target="_blank" rel="noopener">the-odds-api.com</a> (500 credits a month). It's saved on this phone only and is never added to the website.</span>
+          <span class="small">Key from <a href="https://the-odds-api.com" target="_blank" rel="noopener">the-odds-api.com</a> (500 credits a month on the free plan). To use more than one, separate them with commas: the page uses the first key until it runs out of credits, then moves to the next. Saved on this phone only, never added to the website.</span>
         </label>
         <label class="inline"><input id="showkey" type="checkbox"> Show key</label>
+        <div class="small" id="keyinfo"></div>
         <label>Betfair commission (%)
           <input id="comm" class="num" type="number" min="0" max="15" step="0.5" inputmode="decimal">
           <span class="small">Betfair prices are cut by this before the value check, so they compare fairly with the bookmakers.</span>
@@ -250,6 +251,27 @@ let LEAGUES = {};
 const edgeNow = () => { const v = +store.get('edge', 3); return (isFinite(v) && v >= 0 ? v : 3) / 100; };
 const commNow = () => { const v = +mine.get('comm', 6); return (isFinite(v) && v >= 0 && v < 50 ? v : 6) / 100; };
 const keyNow = () => { try { return (localStorage.getItem('lineboard:odds:apikey') || '').trim(); } catch (e) { return ''; } };
+// Several keys can be saved, separated by commas (or spaces / new lines). They are used in order, moving on to the
+// next when one runs out of credits or isn't accepted. Each key's credits left are remembered for the month.
+const keysNow = () => [...new Set(keyNow().split(/[\s,;]+/).map(k => k.trim()).filter(Boolean))];
+const keyTag = k => '…' + k.slice(-4);
+const monthNow = () => new Date().toISOString().slice(0, 7);
+function keyCredits() { const c = mine.get('credits', {}); return c && c.month === monthNow() ? c : { month: monthNow() }; }
+function noteCredits(k, left) {
+  if (left === null || left === undefined || left === '' || !isFinite(+left)) return;
+  const c = keyCredits(); c[keyTag(k)] = +left; mine.set('credits', c); showKeys();
+}
+function creditsLeft() {                     // total across the saved keys, where known
+  const ks = keysNow(), c = keyCredits(), known = ks.filter(k => c[keyTag(k)] !== undefined);
+  return known.length ? known.reduce((s, k) => s + c[keyTag(k)], 0) : null;
+}
+function showKeys() {
+  const el = $('#keyinfo'); if (!el) return;
+  const ks = keysNow(), c = keyCredits();
+  el.textContent = ks.length > 1 ? ks.map((k, i) => `Key ${i + 1} (${keyTag(k)}): ${c[keyTag(k)] ?? 'not used yet'}${c[keyTag(k)] !== undefined ? ' left' : ''}`).join(' · ') : '';
+  const left = creditsLeft();
+  if (left !== null) $('#credits').textContent = `${left} credits left this month${ks.length > 1 ? ` across ${ks.length} keys` : ''}`;
+}
 const effective = (book, price) => book === 'betfair_ex_au' ? 1 + (price - 1) * (1 - commNow()) : price;
 const upcoming = L => (L.games || []).filter(g => Date.parse(g.tip_iso) > Date.now());
 
@@ -277,7 +299,7 @@ function wireSettings() {
   const key = $('#key'), comm = $('#comm'), edge = $('#edge'), fill = $('#fill');
   key.value = keyNow();
   if (!key.value) $('#settings').open = true;
-  key.addEventListener('input', () => { try { localStorage.setItem('lineboard:odds:apikey', key.value.trim()); } catch (e) {} });
+  key.addEventListener('input', () => { try { localStorage.setItem('lineboard:odds:apikey', key.value.trim()); } catch (e) {} showKeys(); });
   $('#showkey').addEventListener('change', e => { key.type = e.target.checked ? 'text' : 'password'; });
   comm.value = +(commNow() * 100).toFixed(2);
   comm.addEventListener('input', () => { const v = parseFloat(comm.value); if (isFinite(v) && v >= 0 && v < 50) { mine.set('comm', v); rerender(); } });
@@ -330,20 +352,45 @@ function sideOf(g, name) {
 }
 
 // ---- the odds call ------------------------------------------------------------------------------
-async function fetchOdds(lg, markets, key) {
+async function fetchOddsWith(lg, markets, key) {
   const url = `${ODDS_API}${SPORT[lg]}/odds/?apiKey=${encodeURIComponent(key)}&bookmakers=${BOOKS.map(b => b[0]).join(',')}` +
               `&markets=${markets.join(',')}&oddsFormat=decimal&dateFormat=iso`;
   const r = await fetch(url, { cache: 'no-store' });
   const credits = { left: r.headers.get('x-requests-remaining'), used: r.headers.get('x-requests-used') };
   if (!r.ok) {
-    let msg = '';
-    try { const j = await r.json(); msg = j.message || ''; } catch (e) {}
-    const err = new Error(r.status === 401 ? 'The odds API didn\'t accept your key. Check it in Settings.'
-      : r.status === 429 ? 'The odds API says you\'re out of credits (or tapping too fast).'
+    let msg = '', code = '';
+    try { const j = await r.json(); msg = j.message || ''; code = j.error_code || ''; } catch (e) {}
+    const empty = code === 'OUT_OF_USAGE_CREDITS' || /quota|usage|credit/i.test(msg);
+    const err = new Error(empty ? `Key ${keyTag(key)} is out of credits for this month.`
+      : r.status === 401 ? `The odds API didn't accept key ${keyTag(key)}. Check it in Settings.`
+      : r.status === 429 ? 'The odds API says you\'re tapping too fast. Wait a moment and try again.'
       : `The odds API returned ${r.status}${msg ? ': ' + msg : ''}`);
-    err.credits = credits; throw err;
+    err.credits = credits; err.empty = empty;
+    err.switchable = empty || r.status === 401;      // another key could work
+    throw err;
   }
   return { events: await r.json(), credits };
+}
+// Try the saved keys in order: keys believed to have enough credits first, then the rest (in case a month has reset)
+async function fetchOdds(lg, markets) {
+  const ks = keysNow(), c = keyCredits(), need = markets.length;
+  const order = [...ks.filter(k => !(c[keyTag(k)] < need)), ...ks.filter(k => c[keyTag(k)] < need)];
+  let lastErr = null;
+  for (const k of order) {
+    try {
+      const res = await fetchOddsWith(lg, markets, k);
+      noteCredits(k, res.credits.left);
+      if (lastErr) res.note = `${lastErr.message} Switched to key ${keyTag(k)}.`;
+      return res;
+    } catch (e) {
+      if (e.credits) noteCredits(k, e.credits.left);
+      if (e.empty) noteCredits(k, 0);
+      lastErr = e;
+      if (!e.switchable) throw e;                   // a problem another key won't fix (network, rate limit)
+    }
+  }
+  if (lastErr && order.length > 1) lastErr.message = `None of your ${order.length} keys worked: ${lastErr.message}`;
+  throw lastErr || new Error('Add your Odds API key in Settings first.');
 }
 
 // Turn raw events into every priced option, worked out against the model
@@ -466,7 +513,7 @@ function render() {
     </section>`);
   }
   box.innerHTML = parts.join('');
-  if (LAST.credits && LAST.credits.left !== null && LAST.credits.left !== undefined) $('#credits').textContent = `${LAST.credits.left} credits left this month`;
+  showKeys();
 }
 const rerender = () => render();
 
@@ -498,12 +545,13 @@ async function go() {
   try {
     LEAGUES = await loadPredictions();
     const res = { at: Date.now(), credits: null, leagues: {} };
-    const errors = [];
+    const errors = [], notes = [];
     for (const lg of lgs) {
       if (!LEAGUES[lg] || !upcoming(LEAGUES[lg]).length) continue;
       status.textContent = `Getting ${LNAME[lg]} odds…`;
       try {
-        const { events, credits } = await fetchOdds(lg, mks, key);
+        const { events, credits, note } = await fetchOdds(lg, mks);
+        if (note && !notes.includes(note)) notes.push(note);
         res.credits = credits;
         res.leagues[lg] = analyse(lg, LEAGUES[lg], events);
       } catch (e) {
@@ -519,10 +567,10 @@ async function go() {
       $('#settings').open = false;
       render();
       status.className = errors.length ? 'status err' : 'status';
-      status.textContent = (errors.length ? errors.join(' ') + ' ' : '') +
+      status.textContent = (errors.length ? errors.join(' ') + ' ' : '') + (notes.length ? notes.join(' ') + ' ' : '') +
         `Done at ${new Date(res.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` + (filled ? ' The best prices are now in the board\'s price boxes too.' : '');
     } else {
-      if (res.credits && res.credits.left != null) $('#credits').textContent = `${res.credits.left} credits left this month`;
+      showKeys();
       status.className = 'status err';
       status.textContent = errors.join(' ') || 'Nothing to check: no upcoming games in the leagues you picked.';
     }
@@ -534,8 +582,17 @@ async function go() {
 }
 
 // ---- start ------------------------------------------------------------------------------------------
+// One-tap setup: opening value.html#keys=KEY1,KEY2 saves the keys on this phone and clears them from the address
+// bar (the part after # is never sent to the website, so the keys stay off the server).
+(function keysFromLink() {
+  const m = location.hash.match(/^#keys=([^&]+)/);
+  if (!m) return;
+  try { localStorage.setItem('lineboard:odds:apikey', decodeURIComponent(m[1]).split(/[\s,;]+/).filter(Boolean).join(',')); } catch (e) {}
+  history.replaceState(null, '', location.pathname + location.search);
+})();
 (async function start() {
   wireSettings();
+  showKeys();
   $('#go').addEventListener('click', go);
   try {
     LEAGUES = await loadPredictions();
