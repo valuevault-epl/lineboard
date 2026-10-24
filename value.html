@@ -644,23 +644,71 @@ const rerender = () => render();
 
 // Put the best prices into the board's price boxes (head to head both sides, plus the line and total
 // with the best expected return), so the board's own value chips and stakes light up when you go back.
-function fillBoard() {
-  let n = 0;
+// The prices a check puts on the board for one league: both head-to-head sides, plus the line and total with the
+// best expected return, each with its bookmaker and (when that's PointsBet, Ladbrokes or Neds) the best backup.
+function boardPrices(lg) {
+  const out = {};
   const bookName = o => BOOK_NAME[o.book] + (o.book === 'betfair_ex_au' ? ' (after commission)' : '');
   const altOf = r => r.alt ? { name: bookName(r.alt), line: r.alt.point, odds: r.alt.eff.toFixed(2) } : null;
+  for (const G of LAST.leagues[lg].games) {
+    const g = G.g;
+    if (Date.parse(g.tip_iso) <= Date.now()) continue;
+    const best = bestOf(G), e = { tip: g.tip_iso, h2h: {} };
+    best.filter(r => r.market === 'h2h').forEach(r => { e.h2h[r.side] = { name: bookName(r.top), odds: r.top.eff.toFixed(2), alt: altOf(r) }; });
+    const pick = m => best.filter(r => r.market === m).sort((a, b) => b.top.ev - a.top.ev)[0];
+    for (const m of ['line', 'total']) {
+      const r = pick(m);
+      if (r) e[m] = { side: r.side, line: r.top.point, odds: r.top.eff.toFixed(2), name: bookName(r.top), alt: altOf(r) };
+    }
+    out[g.id] = e;
+  }
+  return out;
+}
+// Save them where every copy of the board can read them (the website on any device, and the claude.ai board when
+// it is next published): odds.json on the 'odds' branch of the lineboard-requests repo, written with the refresh token.
+const ODDS_FILE_API = 'https://api.github.com/repos/valuevault-epl/lineboard-requests/contents/odds.json';
+async function shareOdds() {
+  const token = ghNow();
+  if (!token || !LAST) return;
+  const h = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const snap = { at: new Date(LAST.at).toISOString(), leagues: {} };
+  for (const lg of Object.keys(LAST.leagues)) snap.leagues[lg] = boardPrices(lg);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const g = await fetch(ODDS_FILE_API + '?ref=odds&t=' + Date.now(), { cache: 'no-store', headers: h });
+      let sha, old = null;
+      if (g.ok) {
+        const j = await g.json(); sha = j.sha;
+        try { old = JSON.parse(decodeURIComponent(escape(atob(String(j.content).replace(/\s/g, ''))))); } catch (e) {}
+      }
+      // leagues not in this check keep their prices from the last one, minus games that have started
+      for (const lg of Object.keys((old && old.leagues) || {})) {
+        if (snap.leagues[lg]) continue;
+        const keep = Object.fromEntries(Object.entries(old.leagues[lg]).filter(([, e]) => e && Date.parse(e.tip) > Date.now()));
+        if (Object.keys(keep).length) snap.leagues[lg] = keep;
+      }
+      const content = btoa(unescape(encodeURIComponent(JSON.stringify(snap))));
+      const r = await fetch(ODDS_FILE_API, { method: 'PUT', headers: h,
+        body: JSON.stringify({ message: 'Odds check ' + snap.at, content, branch: 'odds', ...(sha ? { sha } : {}) }) });
+      if (r.ok || (r.status !== 409 && r.status !== 422)) return;
+    } catch (e) { return; }
+  }
+}
+function fillBoard() {
+  let n = 0;
+  const at = new Date(LAST.at).toISOString();
+  // the bookmaker (and backup) is saved with each price, so the board can say where it came from
   for (const lg of Object.keys(LAST.leagues)) {
-    for (const G of LAST.leagues[lg].games) {
-      const g = G.g; if (Date.parse(g.tip_iso) <= Date.now()) continue;
-      const best = bestOf(G);
-      // the bookmaker is saved with each price, so the board can say where it came from
-      best.filter(r => r.market === 'h2h').forEach(r => {
-        const odds = r.top.eff.toFixed(2);
-        store.set(`${g.id}:h2h:${r.side}`, odds); store.set(`${g.id}:h2h:${r.side}:book`, { name: bookName(r.top), odds, alt: altOf(r) }); n++;
-      });
-      const pick = m => best.filter(r => r.market === m).sort((a, b) => b.top.ev - a.top.ev)[0];
-      const put = (k, r) => { const st = { side: r.side, line: r.top.point, odds: r.top.eff.toFixed(2) }; store.set(`${g.id}:${k}`, Object.assign({ book: Object.assign({ name: bookName(r.top), alt: altOf(r) }, st) }, st)); n++; };
-      const ln = pick('line'); if (ln) put('alt', ln);
-      const tt = pick('total'); if (tt) put('tot', tt);
+    for (const [id, e] of Object.entries(boardPrices(lg))) {
+      for (const side of ['home', 'away']) {
+        const x = e.h2h[side]; if (!x) continue;
+        store.set(`${id}:h2h:${side}`, x.odds); store.set(`${id}:h2h:${side}:book`, { name: x.name, odds: x.odds, alt: x.alt, at }); n++;
+      }
+      for (const [m, key] of [['line', 'alt'], ['total', 'tot']]) {
+        const x = e[m]; if (!x) continue;
+        const st = { side: x.side, line: x.line, odds: x.odds };
+        store.set(`${id}:${key}`, Object.assign({ book: Object.assign({ name: x.name, alt: x.alt, at }, st) }, st)); n++;
+      }
     }
   }
   return n;
@@ -709,6 +757,7 @@ async function go() {
       mine.set('last', { at: res.at, credits: res.credits, leagues: res.leagues });
       mine.set('raw', { at: res.at, events: raw });
       const filled = $('#fill').checked ? fillBoard() : 0;
+      shareOdds();                                    // not awaited: other devices and the claude.ai board
       $('#settings').open = false;
       render();
       status.className = errors.length ? 'status err' : 'status';
