@@ -627,14 +627,20 @@ const rerender = () => render();
 // with the best expected return), so the board's own value chips and stakes light up when you go back.
 function fillBoard() {
   let n = 0;
+  const bookName = o => BOOK_NAME[o.book] + (o.book === 'betfair_ex_au' ? ' (after commission)' : '');
   for (const lg of Object.keys(LAST.leagues)) {
     for (const G of LAST.leagues[lg].games) {
       const g = G.g; if (Date.parse(g.tip_iso) <= Date.now()) continue;
       const best = bestOf(G);
-      best.filter(r => r.market === 'h2h').forEach(r => { store.set(`${g.id}:h2h:${r.side}`, r.top.eff.toFixed(2)); n++; });
+      // the bookmaker is saved with each price, so the board can say where it came from
+      best.filter(r => r.market === 'h2h').forEach(r => {
+        const odds = r.top.eff.toFixed(2);
+        store.set(`${g.id}:h2h:${r.side}`, odds); store.set(`${g.id}:h2h:${r.side}:book`, { name: bookName(r.top), odds }); n++;
+      });
       const pick = m => best.filter(r => r.market === m).sort((a, b) => b.top.ev - a.top.ev)[0];
-      const ln = pick('line'); if (ln) { store.set(`${g.id}:alt`, { side: ln.side, line: ln.top.point, odds: ln.top.eff.toFixed(2) }); n++; }
-      const tt = pick('total'); if (tt) { store.set(`${g.id}:tot`, { side: tt.side, line: tt.top.point, odds: tt.top.eff.toFixed(2) }); n++; }
+      const put = (k, r) => { const st = { side: r.side, line: r.top.point, odds: r.top.eff.toFixed(2) }; store.set(`${g.id}:${k}`, Object.assign({ book: Object.assign({ name: bookName(r.top) }, st) }, st)); n++; };
+      const ln = pick('line'); if (ln) put('alt', ln);
+      const tt = pick('total'); if (tt) put('tot', tt);
     }
   }
   return n;
