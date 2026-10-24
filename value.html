@@ -63,6 +63,9 @@ h2 { font: 800 24px/1 var(--display); text-transform: uppercase; letter-spacing:
 .meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
 .status { margin-top: 10px; font-size: 13px; }
 .status.err { color: var(--bad); }
+.refresh { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.refresh.err { color: var(--bad); }
+.refresh.ok { color: var(--good); }
 details.settings { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
 details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .form { display: grid; gap: 12px; margin-top: 12px; }
@@ -124,6 +127,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
     <button class="go" id="go" type="button">Get current odds</button>
     <div class="meta"><span id="cost"></span><span id="credits"></span></div>
     <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div class="refresh" id="refresh" role="status" aria-live="polite" hidden></div>
     <details class="settings" id="settings">
       <summary>Settings</summary>
       <div class="form">
@@ -133,6 +137,10 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
         </label>
         <label class="inline"><input id="showkey" type="checkbox"> Show key</label>
         <div class="small" id="keyinfo"></div>
+        <label>GitHub refresh token
+          <input id="ghtoken" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
+          <span class="small">With this, every tap also asks the spare laptop to re-run the models for the leagues you picked (latest injuries and news), and the value list updates by itself when the new numbers arrive, usually within a few minutes. A fine-grained token that can only write the lineboard-requests repo. Saved on this phone only.</span>
+        </label>
         <label>Betfair commission (%)
           <input id="comm" class="num" type="number" min="0" max="15" step="0.5" inputmode="decimal">
           <span class="small">Betfair prices are cut by this before the value check, so they compare fairly with the bookmakers.</span>
@@ -165,6 +173,8 @@ const SPORT = { nbl: 'basketball_nbl', nba: 'basketball_nba', nfl: 'americanfoot
 const LNAME = { nbl: 'NBL', nba: 'NBA', nfl: 'NFL', cfb: 'CFB' };
 const MARKETS = [['h2h', 'Head to head'], ['spreads', 'Lines'], ['totals', 'Totals']];
 const DATA_API = 'https://api.github.com/repos/valuevault-epl/lineboard/contents/data.json?ref=main';
+const REQ_API = 'https://api.github.com/repos/valuevault-epl/lineboard-requests/contents/refresh.json';
+const REFRESH_WAIT = 10 * 60e3, REFRESH_POLL = 10e3;
 const ODDS_API = 'https://api.the-odds-api.com/v4/sports/';
 // What the backtests say to bet in each sport (same text as the board)
 const PLAYBOOK = {
@@ -251,6 +261,7 @@ let LEAGUES = {};
 const edgeNow = () => { const v = +store.get('edge', 3); return (isFinite(v) && v >= 0 ? v : 3) / 100; };
 const commNow = () => { const v = +mine.get('comm', 6); return (isFinite(v) && v >= 0 && v < 50 ? v : 6) / 100; };
 const keyNow = () => { try { return (localStorage.getItem('lineboard:odds:apikey') || '').trim(); } catch (e) { return ''; } };
+const ghNow = () => { try { return (localStorage.getItem('lineboard:refresh:token') || '').trim(); } catch (e) { return ''; } };
 // Several keys can be saved, separated by commas (or spaces / new lines). They are used in order, moving on to the
 // next when one runs out of credits or isn't accepted. Each key's credits left are remembered for the month.
 const keysNow = () => [...new Set(keyNow().split(/[\s,;]+/).map(k => k.trim()).filter(Boolean))];
@@ -301,6 +312,9 @@ function wireSettings() {
   if (!key.value) $('#settings').open = true;
   key.addEventListener('input', () => { try { localStorage.setItem('lineboard:odds:apikey', key.value.trim()); } catch (e) {} showKeys(); });
   $('#showkey').addEventListener('change', e => { key.type = e.target.checked ? 'text' : 'password'; });
+  const gh = $('#ghtoken');
+  gh.value = ghNow();
+  gh.addEventListener('input', () => { try { localStorage.setItem('lineboard:refresh:token', gh.value.trim()); } catch (e) {} });
   comm.value = +(commNow() * 100).toFixed(2);
   comm.addEventListener('input', () => { const v = parseFloat(comm.value); if (isFinite(v) && v >= 0 && v < 50) { mine.set('comm', v); rerender(); } });
   edge.value = +(edgeNow() * 100).toFixed(2);
@@ -310,26 +324,93 @@ function wireSettings() {
 }
 
 // ---- predictions: the newest data.json (same source and cache as the board) ---------------------
-async function loadPredictions() {
+async function loadData(token) {
   let fresh = null;
   try { fresh = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null'); } catch (e) {}
   try {
     const h = { 'Accept': 'application/vnd.github.raw+json' };
     const tag = localStorage.getItem('lineboard:etag');
     if (tag && fresh) h['If-None-Match'] = tag;
-    const r = await fetch(DATA_API, { cache: 'no-store', headers: h });
-    if (r.status === 304 && fresh) return fresh.leagues;
+    if (token) h['Authorization'] = 'Bearer ' + token;     // with a token, checking every few seconds is free
+    let r = await fetch(DATA_API, { cache: 'no-store', headers: h });
+    if (token && (r.status === 401 || r.status === 403)) { delete h['Authorization']; r = await fetch(DATA_API, { cache: 'no-store', headers: h }); }
+    if (r.status === 304 && fresh) return fresh;
     if (!r.ok) throw new Error('GitHub API ' + r.status);
     const d = await r.json();
     try {
-      localStorage.setItem('lineboard:fresh', JSON.stringify({ stamp: d.stamp, leagues: d.leagues }));
+      localStorage.setItem('lineboard:fresh', JSON.stringify({ stamp: d.stamp, leagues: d.leagues, request: d.request || null }));
       if (r.headers.get('ETag')) localStorage.setItem('lineboard:etag', r.headers.get('ETag'));
     } catch (e) {}
-    return d.leagues;
+    return d;
   } catch (e) {
-    try { const r = await fetch('data.json?t=' + Date.now(), { cache: 'no-store' }); if (r.ok) return (await r.json()).leagues; } catch (e2) {}
-    if (fresh) return fresh.leagues;
+    try { const r = await fetch('data.json?t=' + Date.now(), { cache: 'no-store' }); if (r.ok) return await r.json(); } catch (e2) {}
+    if (fresh) return fresh;
     throw new Error('Couldn\'t load the predictions');
+  }
+}
+const loadPredictions = async () => (await loadData()).leagues;
+
+// ---- asking the spare laptop to re-run the models ------------------------------------------------
+// The page writes refresh.json to the lineboard-requests repo with the phone's token. The laptop sees the new commit
+// within ~20 seconds, re-runs those leagues and publishes; data.json then carries { request: { id, done, failed } }.
+async function askRefresh(lgs) {
+  const token = ghNow();
+  const h = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const content = btoa(JSON.stringify({ id, leagues: lgs, at: new Date().toISOString() }));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const g = await fetch(REQ_API + '?ref=main&t=' + Date.now(), { cache: 'no-store', headers: h });
+    if (g.status === 401) throw new Error('GitHub didn\'t accept the refresh token (it may have expired). Check it in Settings.');
+    const sha = g.ok ? (await g.json()).sha : undefined;
+    const r = await fetch(REQ_API, { method: 'PUT', headers: h,
+      body: JSON.stringify({ message: 'Refresh ' + lgs.map(k => LNAME[k]).join(', '), content, ...(sha ? { sha } : {}) }) });
+    if (r.ok) return id;
+    if (r.status === 409 || r.status === 422) continue;   // someone wrote it in between: read it again
+    if (r.status === 401) throw new Error('GitHub didn\'t accept the refresh token (it may have expired). Check it in Settings.');
+    if (r.status === 403 || r.status === 404) throw new Error('The refresh token can\'t write the lineboard-requests repo. Check its access in Settings.');
+    throw new Error('GitHub returned ' + r.status + ' for the refresh request.');
+  }
+  throw new Error('Couldn\'t send the refresh request. Try again.');
+}
+const refreshLine = (text, cls = '') => { const el = $('#refresh'); el.hidden = !text; el.className = 'refresh ' + cls; el.textContent = text || ''; };
+const timeOf = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const genTime = L => { const m = String(L && L.generated || '').match(/, (.*)$/); return m ? m[1].replace(/^0/, '') : ''; };
+let WAITING = null;    // the refresh being waited on: { id, lgs, before: { lg: generated }, at }
+async function waitForRefresh(w) {
+  WAITING = w; mine.set('pending', w);
+  const names = w.lgs.map(k => LNAME[k]).join(', ');
+  while (WAITING === w && Date.now() - w.at < REFRESH_WAIT) {
+    const mins = Math.max(0, Math.round((Date.now() - w.at) / 60000));
+    refreshLine(`Asked the laptop to refresh ${names} for the latest injuries and news${mins ? ` (${mins} min so far)` : ''}. The value list updates by itself when the new numbers arrive - keep this page open.`);
+    await new Promise(r => setTimeout(r, REFRESH_POLL));
+    if (WAITING !== w) return;
+    let d;
+    try { d = await loadData(ghNow()); } catch (e) { continue; }
+    const req = d.request && d.request.id === w.id ? d.request : null;
+    const changed = w.lgs.every(k => d.leagues && d.leagues[k] && d.leagues[k].generated !== w.before[k]);
+    if (!req && !changed) continue;
+    WAITING = null; mine.set('pending', null);
+    LEAGUES = d.leagues;
+    const raw = mine.get('raw', null), redo = [];
+    if (LAST && raw && raw.at === LAST.at) {
+      for (const lg of Object.keys(LAST.leagues)) {
+        if (LEAGUES[lg] && raw.events[lg]) { LAST.leagues[lg] = analyse(lg, LEAGUES[lg], raw.events[lg]); redo.push(lg); }
+      }
+      mine.set('last', { at: LAST.at, credits: LAST.credits, leagues: LAST.leagues });
+      render();
+    }
+    buildPickers();
+    const failed = req ? (req.failed || []).filter(k => w.lgs.includes(k)) : [];
+    const ok = w.lgs.filter(k => !failed.includes(k));
+    refreshLine((ok.length ? `${ok.map(k => LNAME[k]).join(', ')} predictions refreshed at ${timeOf(Date.now())}` +
+      (redo.length ? ', and the value list is worked out again with the same odds (no extra credits).' : '.') : '') +
+      (failed.length ? ` ${failed.map(k => `${LNAME[k]} couldn't refresh on the laptop, so its numbers are from ${genTime(LEAGUES[k]) || 'the last run'}.`).join(' ')}` : ''),
+      failed.length ? 'err' : 'ok');
+    return;
+  }
+  if (WAITING === w) {
+    WAITING = null; mine.set('pending', null);
+    refreshLine(`The laptop didn't answer within ${REFRESH_WAIT / 60000} minutes (it may be asleep or off), so these are the predictions from its last run.`, 'err');
   }
 }
 
@@ -505,7 +586,7 @@ function render() {
       !rows.length ? 'No upcoming games came back from the bookmakers for this league.' : ''
     ].filter(Boolean).join(' ');
     parts.push(`<section class="panel league" style="--lc:var(--${lg})">
-      <div class="league-h"><h2>${LNAME[lg]}</h2><span class="small">${esc(L.label || '')} · odds as at ${new Date(LAST.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${ageMin >= 15 ? ` (${ageMin} min ago, tap again for fresh prices)` : ''}</span></div>
+      <div class="league-h"><h2>${LNAME[lg]}</h2><span class="small">${esc(L.label || '')}${genTime(L) ? ` · predictions ${esc(genTime(L))}` : ''} · odds as at ${new Date(LAST.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${ageMin >= 15 ? ` (${ageMin} min ago, tap again for fresh prices)` : ''}</span></div>
       ${PLAYBOOK[lg] ? `<p class="note small">${esc(PLAYBOOK[lg])}</p>` : ''}${caution}
       <ul class="valuelist">${vlist}</ul>
       ${games}
@@ -544,8 +625,17 @@ async function go() {
   status.textContent = 'Loading the latest predictions…';
   try {
     LEAGUES = await loadPredictions();
-    const res = { at: Date.now(), credits: null, leagues: {} };
+    const res = { at: Date.now(), credits: null, leagues: {} }, raw = {};
     const errors = [], notes = [];
+    const want = lgs.filter(lg => LEAGUES[lg] && upcoming(LEAGUES[lg]).length);
+    let refresh = null;
+    if (ghNow() && want.length) {
+      status.textContent = 'Asking the laptop to refresh the predictions…';
+      try {
+        const id = await askRefresh(want);
+        refresh = { id, lgs: want, before: Object.fromEntries(want.map(k => [k, LEAGUES[k].generated])), at: Date.now() };
+      } catch (e) { refreshLine(e.message + ' The odds are checked against the last predictions.', 'err'); }
+    } else if (!ghNow()) refreshLine('');
     for (const lg of lgs) {
       if (!LEAGUES[lg] || !upcoming(LEAGUES[lg]).length) continue;
       status.textContent = `Getting ${LNAME[lg]} odds…`;
@@ -553,6 +643,7 @@ async function go() {
         const { events, credits, note } = await fetchOdds(lg, mks);
         if (note && !notes.includes(note)) notes.push(note);
         res.credits = credits;
+        raw[lg] = events;
         res.leagues[lg] = analyse(lg, LEAGUES[lg], events);
       } catch (e) {
         if (e.credits) res.credits = e.credits;
@@ -563,6 +654,7 @@ async function go() {
     if (Object.keys(res.leagues).length) {
       LAST = res;
       mine.set('last', { at: res.at, credits: res.credits, leagues: res.leagues });
+      mine.set('raw', { at: res.at, events: raw });
       const filled = $('#fill').checked ? fillBoard() : 0;
       $('#settings').open = false;
       render();
@@ -574,6 +666,7 @@ async function go() {
       status.className = 'status err';
       status.textContent = errors.join(' ') || 'Nothing to check: no upcoming games in the leagues you picked.';
     }
+    if (refresh) waitForRefresh(refresh);           // not awaited: the odds show now, the refresh updates them later
   } catch (e) {
     status.className = 'status err'; status.textContent = e.message || 'Something went wrong.';
   } finally {
@@ -585,9 +678,12 @@ async function go() {
 // One-tap setup: opening value.html#keys=KEY1,KEY2 saves the keys on this phone and clears them from the address
 // bar (the part after # is never sent to the website, so the keys stay off the server).
 (function keysFromLink() {
-  const m = location.hash.match(/^#keys=([^&]+)/);
-  if (!m) return;
-  try { localStorage.setItem('lineboard:odds:apikey', decodeURIComponent(m[1]).split(/[\s,;]+/).filter(Boolean).join(',')); } catch (e) {}
+  const q = new URLSearchParams(location.hash.slice(1));
+  if (!q.has('keys') && !q.has('gh')) return;
+  try {
+    if (q.get('keys')) localStorage.setItem('lineboard:odds:apikey', q.get('keys').split(/[\s,;]+/).filter(Boolean).join(','));
+    if (q.get('gh')) localStorage.setItem('lineboard:refresh:token', q.get('gh').trim());
+  } catch (e) {}
   history.replaceState(null, '', location.pathname + location.search);
 })();
 (async function start() {
@@ -600,6 +696,8 @@ async function go() {
   buildPickers();
   const last = mine.get('last', null);       // show the last check again (no credits used)
   if (last && last.leagues && Date.now() - last.at < 12 * 3600e3) { LAST = last; render(); }
+  const pending = mine.get('pending', null);
+  if (pending && pending.id && Date.now() - pending.at < REFRESH_WAIT) waitForRefresh(pending);
 })();
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
 </script>
