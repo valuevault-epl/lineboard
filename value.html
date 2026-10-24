@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Odds check · Line Board</title>
+<meta name="description" content="Pulls current bookmaker prices and checks them against the Line Board's win chances, lines and totals.">
+<meta name="theme-color" content="#eef1f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e141a" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+*,*::before,*::after{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0}[hidden]{display:none!important}
+/* Same palette and type as the Line Board (index.html) */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #f6f8fa; --ink: #14202c; --muted: #5a6978; --line: #d6dde4;
+  --accent: #c94f1c; --accent-ink: #ffffff; --accent-soft: #fae5da;
+  --good: #187a4b; --good-soft: #dcf1e5; --warn: #9a6200; --warn-soft: #fbeed3; --bad: #b0281f; --bad-soft: #f8dfdc;
+  --display: 'Big Shoulders Display', 'Arial Narrow', 'Roboto Condensed', sans-serif;
+  --body: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --radius: 10px;
+  --nbl: #c94f1c; --nba: #1d4ea3; --nfl: #2a7a3b; --cfb: #9e1b32;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0e141a; --surface: #161f28; --surface-2: #1c2732; --ink: #e5ebf1; --muted: #93a2b1; --line: #2b3846;
+  --accent: #f07a42; --accent-ink: #1a0d06; --accent-soft: #3b2216;
+  --good: #52c690; --good-soft: #143022; --warn: #e3aa40; --warn-soft: #33270f; --bad: #f1786f; --bad-soft: #3b1b19;
+  --nbl: #f07a42; --nba: #7aa7f5; --nfl: #5cc27a; --cfb: #e66a7d;
+  color-scheme: dark; } }
+body { background: var(--bg); color: var(--ink); font: 400 15px/1.45 var(--body); }
+a { color: var(--accent); }
+.wrap { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 48px; display: grid; gap: 16px; }
+.eyebrow { font: 600 11px/1.2 var(--body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+h1 { font: 800 clamp(34px, 8vw, 52px)/0.95 var(--display); letter-spacing: .01em; margin: 6px 0 0; text-transform: uppercase; }
+h1 span { color: var(--accent); }
+h2 { font: 800 24px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; margin: 0; }
+.top { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: end; justify-content: space-between; }
+.top p { margin: 8px 0 0; color: var(--muted); font-size: 13px; max-width: 62ch; }
+.back { font: 600 13px/1 var(--body); text-decoration: none; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); white-space: nowrap; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+.small { font-size: 12px; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { position: relative; }
+.pill input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.pill > span { display: inline-flex; align-items: center; gap: 6px; font: 600 13px/1 var(--body); padding: 9px 13px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); }
+.pill input:checked + span { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--ink); }
+.pill input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pill input:disabled + span { opacity: .45; }
+.cnt { font: 400 12px/1 var(--body); color: var(--muted); font-style: normal; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.go { width: 100%; margin-top: 12px; font: 800 22px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; padding: 16px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+.go:disabled { opacity: .6; cursor: progress; }
+.meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.status { margin-top: 10px; font-size: 13px; }
+.status.err { color: var(--bad); }
+details.settings { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.form { display: grid; gap: 12px; margin-top: 12px; }
+.form label { display: grid; gap: 5px; font-size: 13px; font-weight: 600; }
+.form input[type=password], .form input[type=text], .form input[type=number] { font: 400 15px/1.2 var(--mono); padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--ink); width: 100%; }
+.form .inline { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.form .inline input { width: auto; }
+.form .num { max-width: 120px; }
+.league { display: grid; gap: 12px; }
+.league-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.league-h h2 { color: var(--lc, var(--accent)); }
+.note { margin: 0; font-size: 13px; }
+.caution { background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+.caution b { color: var(--warn); }
+.league > * { min-width: 0; }
+.valuelist { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.valuelist li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: start; padding: 10px 12px; border-radius: 8px; background: var(--good-soft); }
+.valuelist li.none { background: var(--surface-2); color: var(--muted); font-size: 13px; display: block; }
+.valuelist b { font-weight: 700; }
+.valuelist small { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.valuelist .num { text-align: right; font-family: var(--mono); }
+.valuelist .num b { color: var(--good); font-size: 17px; display: block; }
+.valuelist .num small { white-space: nowrap; }
+.game { border-top: 1px solid var(--line); padding-top: 10px; }
+.game summary { cursor: pointer; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-weight: 600; }
+.game summary .small { font-weight: 400; }
+.mk { margin-top: 10px; }
+.mk h4 { margin: 0 0 2px; font: 600 11px/1.2 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.opt:first-of-type { border-top: 0; }
+.opt .sel { font-weight: 600; min-width: 0; }
+.opt .px { grid-column: 1 / -1; font: 400 13px/1.35 var(--mono); }
+.opt .px b { font-weight: 600; }
+.opt .books { grid-column: 1 / -1; color: var(--muted); font: 400 11px/1.4 var(--mono); overflow-wrap: anywhere; }
+.chip { display: inline-flex; align-items: center; font: 600 12px/1 var(--body); padding: 5px 8px; border-radius: 999px; white-space: nowrap; }
+.chip.good { background: var(--good-soft); color: var(--good); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.none { background: var(--surface-2); color: var(--muted); }
+.foot { font-size: 12px; color: var(--muted); display: grid; gap: 6px; }
+.foot p { margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Line Board</div>
+      <h1>Odds <span>check</span></h1>
+      <p>One tap pulls current prices from TAB, Sportsbet, Betfair, PointsBet, Ladbrokes and Neds, then checks every head to head, line and total against the board's win chances. Nothing updates on its own, so you only use credits when you tap.</p>
+    </div>
+    <a class="back" href="./">← Back to the board</a>
+  </header>
+
+  <section class="panel" aria-labelledby="check-h">
+    <h2 id="check-h" class="eyebrow" style="font-size:11px">What to check</h2>
+    <div class="pills" id="leagues" role="group" aria-label="Leagues" style="margin-top:8px"></div>
+    <div class="pills" id="markets" role="group" aria-label="Markets" style="margin-top:8px"></div>
+    <button class="go" id="go" type="button">Get current odds</button>
+    <div class="meta"><span id="cost"></span><span id="credits"></span></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <details class="settings" id="settings">
+      <summary>Settings</summary>
+      <div class="form">
+        <label>Odds API key
+          <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key from the-odds-api.com">
+          <span class="small">Free key at <a href="https://the-odds-api.com" target="_blank" rel="noopener">the-odds-api.com</a> (500 credits a month). It's saved on this phone only and is never added to the website.</span>
+        </label>
+        <label class="inline"><input id="showkey" type="checkbox"> Show key</label>
+        <label>Betfair commission (%)
+          <input id="comm" class="num" type="number" min="0" max="15" step="0.5" inputmode="decimal">
+          <span class="small">Betfair prices are cut by this before the value check, so they compare fairly with the bookmakers.</span>
+        </label>
+        <label>Minimum edge (%)
+          <input id="edge" class="num" type="number" min="0" max="30" step="0.5" inputmode="decimal">
+          <span class="small">The same setting as on the board. A price counts as value when the model's expected return is at least this.</span>
+        </label>
+        <label class="inline"><input id="fill" type="checkbox"> Copy the best prices into the board's price boxes</label>
+      </div>
+    </details>
+  </section>
+
+  <div id="results" class="league" aria-live="polite"></div>
+
+  <footer class="foot">
+    <p>How it works: for each selection the page takes the best price across the six bookmakers (Betfair after your commission) and works out the model's expected return at that price, using the same win chances, line and total maths as the board. "Take at" is the lowest price worth betting at your minimum edge. Stakes use the Kelly settings you saved on the board.</p>
+    <p>Lines and totals: bookmakers often hang different lines, so each side shows the line and price with the best expected return, and the other books' lines under it.</p>
+    <p>Games that have already started are skipped, because the board's numbers are pre-game. Odds come from The Odds API and can be a minute or two behind the bookmakers' own sites, so check the price before you bet.</p>
+  </footer>
+</div>
+
+<script>
+'use strict';
+// ---- set-up -------------------------------------------------------------------------------------
+const BOOKS = [['tab', 'TAB'], ['sportsbet', 'Sportsbet'], ['betfair_ex_au', 'Betfair'], ['pointsbetau', 'PointsBet'], ['ladbrokes_au', 'Ladbrokes'], ['neds', 'Neds']];
+const BOOK_NAME = Object.fromEntries(BOOKS);
+const BOOK_SHORT = { tab: 'TAB', sportsbet: 'SB', betfair_ex_au: 'BF', pointsbetau: 'PB', ladbrokes_au: 'LB', neds: 'Neds' };
+const SPORT = { nbl: 'basketball_nbl', nba: 'basketball_nba', nfl: 'americanfootball_nfl', cfb: 'americanfootball_ncaaf' };
+const LNAME = { nbl: 'NBL', nba: 'NBA', nfl: 'NFL', cfb: 'CFB' };
+const MARKETS = [['h2h', 'Head to head'], ['spreads', 'Lines'], ['totals', 'Totals']];
+const DATA_API = 'https://api.github.com/repos/valuevault-epl/lineboard/contents/data.json?ref=main';
+const ODDS_API = 'https://api.the-odds-api.com/v4/sports/';
+// What the backtests say to bet in each sport (same text as the board)
+const PLAYBOOK = {
+  nfl: 'Backtested approach: weeks 1-9 only - head-to-head, lines and totals with a 7%+ edge at 10% Kelly. From week 10 the win % follows the price (every stats weighting lost money late in the season), so expect almost no bets.',
+  nba: 'Backtested approach: head-to-head and lines with a 7%+ edge (set Minimum edge to 7) at the best price you can find, 7.5% Kelly. Skip NBA totals: no weighting made them profitable.',
+  nbl: 'Backtested approach: head-to-head and lines close to tip-off (after team news) with a 7%+ edge, head-to-head at 10% Kelly and lines at 7.5%. Totals only when the line first goes up (see each game\'s totals note), at 10%; skip them near tip-off.',
+};
+
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pct = (p, d = 0) => (p * 100).toFixed(d) + '%';
+const fmtOdds = o => (isFinite(o) && o > 1 && o < 1000) ? o.toFixed(2) : '—';
+const signed = (x, d = 1) => (x >= 0 ? '+' : '') + (x * 100).toFixed(d) + '%';
+const lineLabel = h => (h > 0 ? '+' : h < 0 ? '−' : '') + Math.abs(h).toFixed(Math.abs(h % 1) > 0 ? 1 : 0);
+// The board's own saved settings and prices (same keys, so both pages stay in step)
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('nblboard:' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('nblboard:' + k, JSON.stringify(v)); } catch (e) {} }
+};
+// This page's own settings
+const mine = {
+  get(k, d) { try { const v = localStorage.getItem('lineboard:odds:' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('lineboard:odds:' + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+};
+
+// ---- the board's maths (copied from index.html so the numbers match) ----------------------------
+function Phi(x) {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x / 2);
+  return x >= 0 ? (1 + y) / 2 : (1 - y) / 2;
+}
+function keyPmf(mu, sigma, keys, byAbs, lo, hi) {
+  const out = []; let tot = 0;
+  for (let v = lo; v <= hi; v++) {
+    const i = Math.min(byAbs ? Math.abs(v) : v, keys.length - 1);
+    const z = (v - mu) / sigma, p = Math.exp(-0.5 * z * z) * keys[Math.max(i, 0)];
+    out.push(p); tot += p;
+  }
+  return out.map(p => p / tot);
+}
+// A team with expected margin mu (sd sigma) on handicap h wins the bet if margin + h > 0.
+function lineProb(L, mu, sigma, h) {
+  if (L.margin_keys) {
+    const p = keyPmf(mu, sigma, L.margin_keys, true, -90, 90);
+    let win = 0, push = 0;
+    p.forEach((q, i) => { const v = i - 90; if (v + h > 1e-9) win += q; else if (Math.abs(v + h) < 1e-9) push += q; });
+    return { win, push };
+  }
+  const frac = Math.abs(h % 1);
+  if (Math.abs(frac - 0.5) < 1e-9) return { win: Phi((mu + h) / sigma), push: 0 };
+  const win = Phi((mu + h - 0.5) / sigma);
+  const push = h === 0 ? 0 : Phi((mu + h + 0.5) / sigma) - win;
+  return { win: h === 0 ? Phi(mu / sigma) : win, push };
+}
+function totProb(L, mu, sigma, line, side) {
+  if (L.total_keys) {
+    const p = keyPmf(mu, sigma, L.total_keys, false, 0, 160);
+    let over = 0, push = 0;
+    p.forEach((q, t) => { if (t > line + 1e-9) over += q; else if (Math.abs(t - line) < 1e-9) push += q; });
+    return { win: side === 'over' ? over : 1 - over - push, push };
+  }
+  const half = Math.abs(Math.abs(line % 1) - 0.5) < 1e-9;
+  const over = half ? Phi((mu - line) / sigma) : Phi((mu - line - 0.5) / sigma);
+  const push = half ? 0 : Phi((mu - line + 0.5) / sigma) - over;
+  return { win: side === 'over' ? over : 1 - over - push, push };
+}
+const takeOdds = (q, edge) => q.win > 0 ? (1 + edge - q.push) / q.win : Infinity;
+const evAt = (q, odds) => q.win * odds + q.push - 1;
+// Kelly stakes, same defaults and saved settings as the board
+const KELLY_DEFAULT = { frac: 7.5, max: 3, bank: 100 };
+const KELLY_LEAGUE = { nbl: { h2h: 10, total: 10 }, nfl: { h2h: 10, line: 10, total: 10 } };
+function stake(lg, q, odds, market, edge) {
+  const d = Object.assign({ h2h: KELLY_DEFAULT.frac, line: KELLY_DEFAULT.frac, total: KELLY_DEFAULT.frac }, KELLY_LEAGUE[lg] || {});
+  const frac = +store.get(`${lg}:k_${market}`, d[market]);
+  const max = +store.get('kmax', KELLY_DEFAULT.max), bank = +store.get('kbank', KELLY_DEFAULT.bank);
+  const b = odds - 1, l = Math.max(0, 1 - q.win - q.push);
+  const full = (q.win * b - l) / b;
+  if (!(frac > 0) || evAt(q, odds) < edge || full <= 0) return 0;
+  return Math.min(Math.round(full * frac / 100 * bank * 4) / 4, max);
+}
+
+// ---- settings ------------------------------------------------------------------------------------
+let LEAGUES = {};
+const edgeNow = () => { const v = +store.get('edge', 3); return (isFinite(v) && v >= 0 ? v : 3) / 100; };
+const commNow = () => { const v = +mine.get('comm', 6); return (isFinite(v) && v >= 0 && v < 50 ? v : 6) / 100; };
+const keyNow = () => { try { return (localStorage.getItem('lineboard:odds:apikey') || '').trim(); } catch (e) { return ''; } };
+const effective = (book, price) => book === 'betfair_ex_au' ? 1 + (price - 1) * (1 - commNow()) : price;
+const upcoming = L => (L.games || []).filter(g => Date.parse(g.tip_iso) > Date.now());
+
+function buildPickers() {
+  const chosenL = mine.get('leagues', null), chosenM = mine.get('markets', ['h2h', 'spreads', 'totals']);
+  $('#leagues').innerHTML = Object.keys(SPORT).filter(k => LEAGUES[k]).map(k => {
+    const n = upcoming(LEAGUES[k]).length;
+    const on = n > 0 && (chosenL ? chosenL.includes(k) : true);
+    return `<label class="pill"><input type="checkbox" data-lg="${k}" ${on ? 'checked' : ''} ${n ? '' : 'disabled'}><span><i class="dot" style="background:var(--${k})"></i>${LNAME[k]} <em class="cnt">${n ? n + ' game' + (n > 1 ? 's' : '') : 'none to come'}</em></span></label>`;
+  }).join('');
+  $('#markets').innerHTML = MARKETS.map(([k, label]) =>
+    `<label class="pill"><input type="checkbox" data-mk="${k}" ${chosenM.includes(k) ? 'checked' : ''}><span>${label}</span></label>`).join('');
+  document.querySelectorAll('#leagues input, #markets input').forEach(el => el.addEventListener('change', () => {
+    mine.set('leagues', chosen('lg')); mine.set('markets', chosen('mk')); showCost();
+  }));
+  showCost();
+}
+const chosen = attr => [...document.querySelectorAll(`[data-${attr}]`)].filter(el => el.checked && !el.disabled).map(el => el.dataset[attr]);
+function showCost() {
+  const n = chosen('lg').length * chosen('mk').length;
+  $('#cost').textContent = n ? `This check uses ${n} credit${n > 1 ? 's' : ''}` : 'Pick at least one league and one market';
+  $('#go').disabled = !n;
+}
+function wireSettings() {
+  const key = $('#key'), comm = $('#comm'), edge = $('#edge'), fill = $('#fill');
+  key.value = keyNow();
+  if (!key.value) $('#settings').open = true;
+  key.addEventListener('input', () => { try { localStorage.setItem('lineboard:odds:apikey', key.value.trim()); } catch (e) {} });
+  $('#showkey').addEventListener('change', e => { key.type = e.target.checked ? 'text' : 'password'; });
+  comm.value = +(commNow() * 100).toFixed(2);
+  comm.addEventListener('input', () => { const v = parseFloat(comm.value); if (isFinite(v) && v >= 0 && v < 50) { mine.set('comm', v); rerender(); } });
+  edge.value = +(edgeNow() * 100).toFixed(2);
+  edge.addEventListener('input', () => { const v = parseFloat(edge.value); if (isFinite(v) && v >= 0 && v <= 50) { store.set('edge', v); rerender(); } });
+  fill.checked = mine.get('fill', true);
+  fill.addEventListener('change', () => mine.set('fill', fill.checked));
+}
+
+// ---- predictions: the newest data.json (same source and cache as the board) ---------------------
+async function loadPredictions() {
+  let fresh = null;
+  try { fresh = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null'); } catch (e) {}
+  try {
+    const h = { 'Accept': 'application/vnd.github.raw+json' };
+    const tag = localStorage.getItem('lineboard:etag');
+    if (tag && fresh) h['If-None-Match'] = tag;
+    const r = await fetch(DATA_API, { cache: 'no-store', headers: h });
+    if (r.status === 304 && fresh) return fresh.leagues;
+    if (!r.ok) throw new Error('GitHub API ' + r.status);
+    const d = await r.json();
+    try {
+      localStorage.setItem('lineboard:fresh', JSON.stringify({ stamp: d.stamp, leagues: d.leagues }));
+      if (r.headers.get('ETag')) localStorage.setItem('lineboard:etag', r.headers.get('ETag'));
+    } catch (e) {}
+    return d.leagues;
+  } catch (e) {
+    try { const r = await fetch('data.json?t=' + Date.now(), { cache: 'no-store' }); if (r.ok) return (await r.json()).leagues; } catch (e2) {}
+    if (fresh) return fresh.leagues;
+    throw new Error('Couldn\'t load the predictions');
+  }
+}
+
+// ---- matching bookmaker events to the board's games ----------------------------------------------
+const norm = s => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const nick = s => { const w = norm(s).split(' '); return w[w.length - 1]; };
+const ALIAS = { 'la clippers': 'los angeles clippers', 'se melbourne phoenix': 'south east melbourne phoenix', 's e melbourne phoenix': 'south east melbourne phoenix' };
+const full = s => ALIAS[norm(s)] || norm(s);
+function sameTeam(a, b) { return full(a) === full(b) || nick(a) === nick(b); }
+function matchGame(L, ev) {
+  const t = Date.parse(ev.commence_time);
+  return (L.games || []).find(g => Math.abs(Date.parse(g.tip_iso) - t) < 18 * 3600e3 &&
+    ((sameTeam(g.home.name, ev.home_team) && sameTeam(g.away.name, ev.away_team)) ||
+     (sameTeam(g.home.name, ev.away_team) && sameTeam(g.away.name, ev.home_team))));
+}
+function sideOf(g, name) {
+  if (sameTeam(g.home.name, name)) return 'home';
+  if (sameTeam(g.away.name, name)) return 'away';
+  return null;
+}
+
+// ---- the odds call ------------------------------------------------------------------------------
+async function fetchOdds(lg, markets, key) {
+  const url = `${ODDS_API}${SPORT[lg]}/odds/?apiKey=${encodeURIComponent(key)}&bookmakers=${BOOKS.map(b => b[0]).join(',')}` +
+              `&markets=${markets.join(',')}&oddsFormat=decimal&dateFormat=iso`;
+  const r = await fetch(url, { cache: 'no-store' });
+  const credits = { left: r.headers.get('x-requests-remaining'), used: r.headers.get('x-requests-used') };
+  if (!r.ok) {
+    let msg = '';
+    try { const j = await r.json(); msg = j.message || ''; } catch (e) {}
+    const err = new Error(r.status === 401 ? 'The odds API didn\'t accept your key. Check it in Settings.'
+      : r.status === 429 ? 'The odds API says you\'re out of credits (or tapping too fast).'
+      : `The odds API returned ${r.status}${msg ? ': ' + msg : ''}`);
+    err.credits = credits; throw err;
+  }
+  return { events: await r.json(), credits };
+}
+
+// Turn raw events into every priced option, worked out against the model
+function analyse(lg, L, events) {
+  const now = Date.now(), games = {}, unmatched = [], started = [];
+  for (const ev of events) {
+    const g = matchGame(L, ev);
+    if (!g) { unmatched.push(`${ev.away_team} @ ${ev.home_team}`); continue; }
+    if (Date.parse(ev.commence_time) <= now || Date.parse(g.tip_iso) <= now) { started.push(`${g.away.short} @ ${g.home.short}`); continue; }
+    const G = games[g.id] || (games[g.id] = { g, opts: [] });
+    for (const bm of ev.bookmakers || []) {
+      if (!BOOK_NAME[bm.key]) continue;
+      for (const m of bm.markets || []) {
+        for (const o of m.outcomes || []) {
+          if (!(o.price > 1)) continue;
+          let side, q, market, point = null;
+          if (m.key === 'h2h') {
+            side = sideOf(g, o.name); if (!side) continue;
+            market = 'h2h'; q = { win: g[side].win, push: 0 };
+          } else if (m.key === 'spreads') {
+            side = sideOf(g, o.name); if (!side || typeof o.point !== 'number') continue;
+            market = 'line'; point = o.point;
+            q = lineProb(L, side === 'home' ? g.margin : -g.margin, g.sigma, point);
+          } else if (m.key === 'totals') {
+            side = String(o.name).toLowerCase(); if (!['over', 'under'].includes(side) || typeof o.point !== 'number') continue;
+            if (!(g.total > 0 && g.total_sigma > 0)) continue;
+            market = 'total'; point = o.point;
+            q = totProb(L, g.total, g.total_sigma, point, side);
+          } else continue;
+          G.opts.push({ market, side, point, book: bm.key, price: o.price, q });
+        }
+      }
+    }
+  }
+  return { games: Object.values(games), unmatched, started };
+}
+
+// Best option for each game / market / side at the current settings
+function bestOf(G) {
+  const edge = edgeNow(), out = [];
+  for (const market of ['h2h', 'line', 'total']) {
+    const sides = market === 'total' ? ['over', 'under'] : ['away', 'home'];
+    for (const side of sides) {
+      const opts = G.opts.filter(o => o.market === market && o.side === side).map(o => {
+        const eff = effective(o.book, o.price);
+        return Object.assign({}, o, { eff, ev: evAt(o.q, eff) });
+      });
+      if (!opts.length) continue;
+      opts.sort((a, b) => b.ev - a.ev || b.eff - a.eff);
+      const top = opts[0];
+      out.push({ market, side, top, all: opts, take: takeOdds(top.q, edge), value: top.ev >= edge });
+    }
+  }
+  return out;
+}
+
+// ---- drawing --------------------------------------------------------------------------------------
+let LAST = null;    // { at, credits, leagues: { lg: { games: [{g, opts}], unmatched, started } } }
+const selLabel = (g, r) => r.market === 'total' ? `${r.side === 'over' ? 'Over' : 'Under'} ${r.top.point.toFixed(1)}`
+  : `${g[r.side].short}${r.market === 'line' ? ' ' + lineLabel(r.top.point) : ''}`;
+const mktLabel = { h2h: 'Head to head', line: 'Line', total: 'Total' };
+function chip(ev, edge) {
+  if (ev >= edge) return `<span class="chip good">Value ${signed(ev)}</span>`;
+  if (ev >= 0) return `<span class="chip warn">Too thin ${signed(ev)}</span>`;
+  return `<span class="chip bad">No value ${signed(ev)}</span>`;
+}
+function booksLine(r) {
+  const seen = new Set();
+  return r.all.filter(o => { const k = o.book + '|' + o.point; if (seen.has(k)) return false; seen.add(k); return true; })
+    .map(o => `${BOOK_SHORT[o.book]} ${r.market === 'h2h' ? '' : (r.market === 'line' ? lineLabel(o.point) : o.point.toFixed(1)) + ' @'}${fmtOdds(o.price)}`).join(' · ');
+}
+function render() {
+  const box = $('#results');
+  if (!LAST) { box.innerHTML = ''; return; }
+  const edge = edgeNow();
+  const ageMin = Math.round((Date.now() - LAST.at) / 60000);
+  const parts = [];
+  for (const lg of Object.keys(LAST.leagues)) {
+    const R = LAST.leagues[lg], L = LEAGUES[lg] || {};
+    const rows = R.games.map(G => ({ G, best: bestOf(G) }))
+      .filter(x => Date.parse(x.G.g.tip_iso) > Date.now())
+      .sort((a, b) => Date.parse(a.G.g.tip_iso) - Date.parse(b.G.g.tip_iso));
+    const values = [];
+    rows.forEach(({ G, best }) => best.forEach(r => { if (r.value) values.push({ g: G.g, r }); }));
+    values.sort((a, b) => b.r.top.ev - a.r.top.ev);
+    const bt = L.backtest || {};
+    const caution = bt.model_logloss && bt.market_logloss && bt.model_logloss > bt.market_logloss
+      ? `<div class="caution"><b>Careful with ${LNAME[lg]} flags.</b> In the backtest this model's win chances were slightly less accurate than the closing price (log loss ${bt.model_logloss.toFixed(3)} vs ${bt.market_logloss.toFixed(3)}), so many "value" prices here will be the model being wrong, not the bookmaker.</div>` : '';
+    const vlist = values.length ? values.map(({ g, r }) => {
+      const st = stake(lg, r.top.q, r.top.eff, r.market, edge);
+      return `<li><div><b>${esc(selLabel(g, r))}</b> <span class="small">${mktLabel[r.market]}</span>
+          <small>${esc(g.away.short)} @ ${esc(g.home.short)} · ${esc(g.tip)}</small>
+          <small>Model ${pct(r.top.q.win / Math.max(1e-9, 1 - r.top.q.push), 1)} · take at ${fmtOdds(r.take)} · expected return ${signed(r.top.ev)}${st > 0 ? ` · stake ${st}u` : ''}</small></div>
+        <div class="num"><b>${fmtOdds(r.top.eff)}</b><small>${BOOK_NAME[r.top.book]}</small></div></li>`;
+    }).join('') : `<li class="none">No price clears your ${pct(edge, 1).replace('.0%', '%')} minimum edge right now.</li>`;
+    const games = rows.map(({ G, best }) => {
+      const g = G.g, nv = best.filter(r => r.value).length;
+      const byM = m => best.filter(r => r.market === m);
+      const table = m => {
+        const rs = byM(m); if (!rs.length) return '';
+        return `<div class="mk"><h4>${mktLabel[m]}</h4>${rs.map(r => `<div class="opt">
+            <span class="sel">${esc(selLabel(g, r))}</span>${chip(r.top.ev, edge)}
+            <span class="px">Best <b>${fmtOdds(r.top.eff)}</b> ${BOOK_NAME[r.top.book]}${r.top.book === 'betfair_ex_au' ? ` (${fmtOdds(r.top.price)} before commission)` : ''} · take at ${fmtOdds(r.take)}</span>
+            <span class="books">${booksLine(r)}</span></div>`).join('')}</div>`;
+      };
+      return `<details class="game"${nv ? ' open' : ''}><summary><span>${esc(g.away.short)} @ ${esc(g.home.short)}</span><span class="small">${esc(g.tip)}${nv ? ` · <b style="color:var(--good)">${nv} value</b>` : ''}</span></summary>
+        ${table('h2h')}${table('line')}${table('total')}</details>`;
+    }).join('');
+    const extra = [
+      R.started.length ? `Skipped (already started): ${esc(R.started.join(', '))}.` : '',
+      R.unmatched.length ? `Not on the board: ${esc(R.unmatched.join(', '))}.` : '',
+      !rows.length ? 'No upcoming games came back from the bookmakers for this league.' : ''
+    ].filter(Boolean).join(' ');
+    parts.push(`<section class="panel league" style="--lc:var(--${lg})">
+      <div class="league-h"><h2>${LNAME[lg]}</h2><span class="small">${esc(L.label || '')} · odds as at ${new Date(LAST.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${ageMin >= 15 ? ` (${ageMin} min ago, tap again for fresh prices)` : ''}</span></div>
+      ${PLAYBOOK[lg] ? `<p class="note small">${esc(PLAYBOOK[lg])}</p>` : ''}${caution}
+      <ul class="valuelist">${vlist}</ul>
+      ${games}
+      ${extra ? `<p class="note small">${extra}</p>` : ''}
+    </section>`);
+  }
+  box.innerHTML = parts.join('');
+  if (LAST.credits && LAST.credits.left !== null && LAST.credits.left !== undefined) $('#credits').textContent = `${LAST.credits.left} credits left this month`;
+}
+const rerender = () => render();
+
+// Put the best prices into the board's price boxes (head to head both sides, plus the line and total
+// with the best expected return), so the board's own value chips and stakes light up when you go back.
+function fillBoard() {
+  let n = 0;
+  for (const lg of Object.keys(LAST.leagues)) {
+    for (const G of LAST.leagues[lg].games) {
+      const g = G.g; if (Date.parse(g.tip_iso) <= Date.now()) continue;
+      const best = bestOf(G);
+      best.filter(r => r.market === 'h2h').forEach(r => { store.set(`${g.id}:h2h:${r.side}`, r.top.eff.toFixed(2)); n++; });
+      const pick = m => best.filter(r => r.market === m).sort((a, b) => b.top.ev - a.top.ev)[0];
+      const ln = pick('line'); if (ln) { store.set(`${g.id}:alt`, { side: ln.side, line: ln.top.point, odds: ln.top.eff.toFixed(2) }); n++; }
+      const tt = pick('total'); if (tt) { store.set(`${g.id}:tot`, { side: tt.side, line: tt.top.point, odds: tt.top.eff.toFixed(2) }); n++; }
+    }
+  }
+  return n;
+}
+
+// ---- the button -----------------------------------------------------------------------------------
+async function go() {
+  const key = keyNow(), status = $('#status');
+  status.className = 'status';
+  if (!key) { status.className = 'status err'; status.textContent = 'Add your Odds API key in Settings first.'; $('#settings').open = true; $('#key').focus(); return; }
+  const lgs = chosen('lg'), mks = chosen('mk');
+  $('#go').disabled = true; $('#go').textContent = 'Getting odds…';
+  status.textContent = 'Loading the latest predictions…';
+  try {
+    LEAGUES = await loadPredictions();
+    const res = { at: Date.now(), credits: null, leagues: {} };
+    const errors = [];
+    for (const lg of lgs) {
+      if (!LEAGUES[lg] || !upcoming(LEAGUES[lg]).length) continue;
+      status.textContent = `Getting ${LNAME[lg]} odds…`;
+      try {
+        const { events, credits } = await fetchOdds(lg, mks, key);
+        res.credits = credits;
+        res.leagues[lg] = analyse(lg, LEAGUES[lg], events);
+      } catch (e) {
+        if (e.credits) res.credits = e.credits;
+        errors.push(`${LNAME[lg]}: ${e.message}`);
+        if (/key|credits/.test(e.message)) break;     // no point trying the other leagues
+      }
+    }
+    if (Object.keys(res.leagues).length) {
+      LAST = res;
+      mine.set('last', { at: res.at, credits: res.credits, leagues: res.leagues });
+      const filled = $('#fill').checked ? fillBoard() : 0;
+      $('#settings').open = false;
+      render();
+      status.className = errors.length ? 'status err' : 'status';
+      status.textContent = (errors.length ? errors.join(' ') + ' ' : '') +
+        `Done at ${new Date(res.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` + (filled ? ' The best prices are now in the board\'s price boxes too.' : '');
+    } else {
+      if (res.credits && res.credits.left != null) $('#credits').textContent = `${res.credits.left} credits left this month`;
+      status.className = 'status err';
+      status.textContent = errors.join(' ') || 'Nothing to check: no upcoming games in the leagues you picked.';
+    }
+  } catch (e) {
+    status.className = 'status err'; status.textContent = e.message || 'Something went wrong.';
+  } finally {
+    $('#go').textContent = 'Get current odds'; showCost();
+  }
+}
+
+// ---- start ------------------------------------------------------------------------------------------
+(async function start() {
+  wireSettings();
+  $('#go').addEventListener('click', go);
+  try {
+    LEAGUES = await loadPredictions();
+  } catch (e) { $('#status').className = 'status err'; $('#status').textContent = e.message; }
+  buildPickers();
+  const last = mine.get('last', null);       // show the last check again (no credits used)
+  if (last && last.leagues && Date.now() - last.at < 12 * 3600e3) { LAST = last; render(); }
+})();
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>

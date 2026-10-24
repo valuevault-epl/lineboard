@@ -20,8 +20,16 @@ You don't edit this folder by hand.
 
 To stop the automatic push, set the environment variable `LINEBOARD_NO_PUSH=1` before running a model.
 
+## Odds check (value.html)
+https://valuevault-epl.github.io/lineboard/value.html
+
+One button pulls current prices from TAB, Sportsbet, Betfair (after commission), PointsBet, Ladbrokes and Neds through The Odds API, and checks every head to head, line and total against the board's numbers, using the same maths and the same minimum edge and Kelly settings. It only calls the API when you tap (about 1 credit per league per market; the free plan has 500 a month). The API key is typed into the page and saved on the phone only. By default it also copies the best prices into the board's price boxes, so the board's own value chips and stakes light up.
+
+`site_builder.py` doesn't touch this file, so model runs won't overwrite it.
+
 ## Files
 * `index.html`: the board, with that week's predictions inside it (used when opening offline).
 * `data.json`: the same predictions with a timestamp, which the app checks for updates.
 * `manifest.webmanifest` and `icons/`: name, colours and home-screen icon.
-* `sw.js`: offline cache. It opens the saved copy at once and refreshes it in the background.
+* `sw.js`: offline cache. It opens the saved copy at once and refreshes it in the background. Each page (the board, the odds check) keeps its own saved copy.
+* `value.html`: the odds check (see above).

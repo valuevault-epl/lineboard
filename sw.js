@@ -1,8 +1,8 @@
 // Offline support. The app opens instantly from its saved copy and refreshes that copy in the
 // background. Fresh predictions don't depend on this file: the page itself checks data.json through
 // the GitHub API every time it is opened. Google Fonts are cached on first use.
-const VERSION = 'lineboard-v2';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/favicon.svg', './icons/icon-192.png'];
+const VERSION = 'lineboard-v3';
+const SHELL = ['./', './index.html', './value.html', './manifest.webmanifest', './icons/favicon.svg', './icons/icon-192.png'];
 const CDN_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,10 @@ self.addEventListener('activate', e => {
 
 // Serve the saved copy straight away and update it from the network for next time.
 function staleWhileRevalidate(req) {
-  const key = req.mode === 'navigate' ? './index.html' : req;
+  // Opening the board (/, /index.html, or any unknown path) uses the board's saved copy; other pages
+  // such as value.html (the odds check) keep their own copy.
+  const page = new URL(req.url).pathname.split('/').pop();
+  const key = req.mode !== 'navigate' ? req : (page && page.endsWith('.html') && page !== 'index.html' ? './' + page : './index.html');
   const net = fetch(req, { cache: 'no-store' }).then(res => {
     if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(key, copy)); }
     return res;
