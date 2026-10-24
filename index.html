@@ -18,9 +18,9 @@
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0}[hidden]{display:none!important}</style>
 <script>
-// The predictions built into this page are from 2026-10-24T05:12:42Z. If the app has since fetched newer ones
+// The predictions built into this page are from 2026-10-24T05:26:07Z. If the app has since fetched newer ones
 // (saved below by the update check), start from those instead.
-window.__lbBuilt = '2026-10-24T05:12:42Z';
+window.__lbBuilt = '2026-10-24T05:26:07Z';
 window.__lbFresh = function () {
   try {
     var s = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null');
@@ -549,7 +549,7 @@ function sideHTML(gm, key) {
     </dl>
     <div class="oddsrow"><label for="o-${gm.id}-${key}">Your price</label>
       <input id="o-${gm.id}-${key}" data-odds="h2h:${key}" type="number" step="0.01" min="1.01" inputmode="decimal" placeholder="e.g. 1.90" value="${esc(odds)}">${stakeBox(`h2h:${key}`, q, +odds)}</div>
-    <div class="valuebox" data-val="h2h:${key}">${valueHTML(v, +odds, bookOf(gm, 'h2h', key))}</div>
+    <div class="valuebox" data-val="h2h:${key}">${valueHTML(v, +odds, bookOf(gm, 'h2h', key), backupHTML(gm, 'h2h', key))}</div>
     <p class="summary">${esc(lead)}</p>
     <div class="case">
       <div class="for"><h4>Case for</h4><ul>${li(s.pro)}</ul></div>
@@ -558,21 +558,40 @@ function sideHTML(gm, key) {
   </div>`;
 }
 // The bookmaker a price came from, when the odds check page filled it in and it hasn't been changed since
-function bookOf(gm, market, side) {
+function bookInfo(gm, market, side) {
   if (market === 'h2h') {
     const b = store.get(`${gm.id}:h2h:${side}:book`, null), o = store.get(`${gm.id}:h2h:${side}`, '');
-    return b && o !== '' && +b.odds === +o ? b.name : '';
+    return b && o !== '' && +b.odds === +o ? b : null;
   }
   const st = store.get(`${gm.id}:${market}`, null), b = st && st.book;
-  return b && b.side === st.side && Math.abs(b.line - st.line) < 1e-9 && +b.odds === +st.odds ? b.name : '';
+  return b && b.side === st.side && Math.abs(b.line - st.line) < 1e-9 && +b.odds === +st.odds ? b : null;
 }
-function valueHTML(v, odds, book = '') {
+const bookOf = (gm, market, side) => (bookInfo(gm, market, side) || {}).name || '';
+// When that price is at PointsBet, Ladbrokes or Neds, the odds page also saves the best Sportsbet / TAB / Betfair
+// option; it is worked out here with this board's own numbers
+function backup(gm, market, side) {
+  const b = bookInfo(gm, market, side), a = b && b.alt;
+  if (!a || !(+a.odds > 1)) return null;
+  let q, what;
+  if (market === 'h2h') { q = { win: gm[side].win, push: 0 }; what = gm[side].short; }
+  else if (market === 'alt') { const mu = b.side === 'home' ? gm.margin : -gm.margin; q = lineProb(mu, gm.sigma, a.line); what = `${gm[b.side].short} ${lineLabel(a.line)}`; }
+  else { q = totProb(gm.total, gm.total_sigma, a.line, b.side); what = totLabel(b.side, a.line); }
+  return { name: a.name, what, odds: +a.odds, e: ev(q, +a.odds), k: kelly(q, +a.odds, market === 'alt' ? 'line' : market === 'tot' ? 'total' : 'h2h') };
+}
+const sgn = e => { const v = +(e * 100).toFixed(1); return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; };   // never "-0.0%"
+function backupHTML(gm, market, side) {
+  const x = backup(gm, market, side);
+  if (!x) return '';
+  return `<span>Backup: <span class="bk">${esc(x.name)}</span> ${esc(x.what)} @ ${x.odds.toFixed(2)} · expected return ${sgn(x.e)}` +
+    `${x.k && x.k.units > 0 ? ` · stake ${fmtU(x.k.units)}u` : x.e < EDGE ? ' · below your minimum edge' : ''}</span>`;
+}
+function valueHTML(v, odds, book = '', extra = '') {
   if (v.ev === null) return `<span class="chip none">${v.text}</span>`;
   const k = v.k;
   const stake = !k ? '' : k.units > 0
     ? `<span>Stake ${fmtU(k.units)}u: ${k.frac}% of the full Kelly stake (${pct(k.full, 1)} of a ${KELLY.bank}u bank)${k.capped ? `, capped at your ${fmtU(KELLY.max)}u max` : ''}.</span>`
     : `<span>No stake: ${k.why}.</span>`;
-  return `<span class="chip ${v.cls}">${v.text}</span>${book ? `<span>Price from <span class="bk">${esc(book)}</span></span>` : ''}<span>Expected return ${(v.ev >= 0 ? '+' : '') + pct(v.ev, 1)} · your price implies ${pct(1 / odds)}</span>${stake}`;
+  return `<span class="chip ${v.cls}">${v.text}</span>${book ? `<span>Price from <span class="bk">${esc(book)}</span></span>` : ''}${v.ev >= EDGE ? extra : ''}<span>Expected return ${(v.ev >= 0 ? '+' : '') + pct(v.ev, 1)} · your price implies ${pct(1 / odds)}</span>${stake}`;
 }
 
 // cut = the line on the value axis; the shaded side wins the bet (right = above the line).
@@ -642,7 +661,7 @@ function renderAlt(card, gm) {
     <p class="small" style="margin:6px 0 0">${st.line === 0 ? `${esc(s.short)} must win` : st.line < 0 ? `${esc(s.short)} must win by ${Math.floor(-st.line) + 1}+` : `${esc(s.short)} can lose by up to ${Math.ceil(st.line) - 1}`}${q.push > 0 ? ` (exactly ${Math.abs(st.line)} is a push)` : ''}. Fails ${pct(loss, 1)} of the time.</p>
     ${strengthHTML(lineStrength(q, DATA.line_bands, gm.signal.uncertain), 'line')}`;
   const v = verdict(q, +st.odds, 'line');
-  $('[data-altval]', card).innerHTML = valueHTML(v, +st.odds, bookOf(gm, 'alt'));
+  $('[data-altval]', card).innerHTML = valueHTML(v, +st.odds, bookOf(gm, 'alt'), backupHTML(gm, 'alt'));
   setStake($('[data-stake="alt"]', card), q, +st.odds);
   $('[data-dist]', card).innerHTML = distSVG(mu, gm.sigma, -st.line, st.side === 'home' ? 'var(--home)' : 'var(--away)');
 }
@@ -710,7 +729,7 @@ function renderTot(card, gm) {
       <div class="take"><dt>Take at</dt><dd>${fmtOdds(takeOdds(q))}</dd></div></dl>
     <p class="small" style="margin:6px 0 0">Needs ${need}${whole ? ` (exactly ${L} is a push)` : ''}. Fails ${pct(1 - q.win - q.push, 1)} of the time.</p>
     ${strengthHTML(lineStrength(q, DATA.total_bands, gm.signal.uncertain), 'total')}`;
-  $('[data-totval]', card).innerHTML = valueHTML(verdict(q, +st.odds, 'total'), +st.odds, bookOf(gm, 'tot'));
+  $('[data-totval]', card).innerHTML = valueHTML(verdict(q, +st.odds, 'total'), +st.odds, bookOf(gm, 'tot'), backupHTML(gm, 'tot'));
   setStake($('[data-stake="tot"]', card), q, +st.odds);
   $('[data-tdist]', card).innerHTML = distSVG(gm.total, gm.total_sigma, L, st.side === 'over' ? 'var(--over)' : 'var(--under)', st.side === 'over', false, 'Spread of likely totals with the selected line');
 }
@@ -828,25 +847,25 @@ function best() {
   for (const gm of DATA.games) {
     for (const key of ['away', 'home']) {
       const odds = +store.get(`${gm.id}:h2h:${key}`, '');
-      if (odds > 1) { const q = { win: gm[key].win, push: 0 }; items.push({ gm, q, what: `${gm[key].short} to win`, odds, e: ev(q, odds), p: q.win, bars: gm.pick === key ? gm.signal.bars : 1, book: bookOf(gm, 'h2h', key) }); }
+      if (odds > 1) { const q = { win: gm[key].win, push: 0 }; items.push({ gm, q, what: `${gm[key].short} to win`, odds, e: ev(q, odds), p: q.win, bars: gm.pick === key ? gm.signal.bars : 1, book: bookOf(gm, 'h2h', key), bk: backup(gm, 'h2h', key) }); }
     }
     const st = store.get(`${gm.id}:alt`, null);
     if (st && +st.odds > 1) {
       const mu = st.side === 'home' ? gm.margin : -gm.margin, q = lineProb(mu, gm.sigma, st.line);
       items.push({ gm, q, market: 'line', what: `${gm[st.side].short} ${lineLabel(st.line)}`, odds: +st.odds, e: ev(q, +st.odds), p: q.win,
-                   bars: lineStrength(q, DATA.line_bands, gm.signal.uncertain).bars, book: bookOf(gm, 'alt') });
+                   bars: lineStrength(q, DATA.line_bands, gm.signal.uncertain).bars, book: bookOf(gm, 'alt'), bk: backup(gm, 'alt') });
     }
     const tt = hasTot(gm) ? store.get(`${gm.id}:tot`, null) : null;
     if (tt && +tt.odds > 1) {
       const q = totProb(gm.total, gm.total_sigma, tt.line, tt.side);
       items.push({ gm, q, market: 'total', what: totLabel(tt.side, tt.line), odds: +tt.odds, e: ev(q, +tt.odds), p: q.win,
-                   bars: lineStrength(q, DATA.total_bands, gm.signal.uncertain).bars, book: bookOf(gm, 'tot') });
+                   bars: lineStrength(q, DATA.total_bands, gm.signal.uncertain).bars, book: bookOf(gm, 'tot'), bk: backup(gm, 'tot') });
     }
   }
   const el = $('#best');
   const good = items.filter(i => i.e >= EDGE).sort((a, b) => b.e - a.e);
   if (good.length) {
-    el.innerHTML = good.map(i => `<li><div class="what"><b>${esc(i.what)}</b> @ <span class="num">${i.odds.toFixed(2)}</span>${i.book ? ` <span class="bk">${esc(i.book)}</span>` : ''}<small>${esc(i.gm.away.short)} at ${esc(i.gm.home.short)} · ${esc(i.gm.tip)} · model ${pct(i.p)}</small></div>${sigBars(i.bars)}<span class="chip good">+${pct(i.e, 1)}${stakeTag(i)}</span></li>`).join('');
+    el.innerHTML = good.map(i => `<li><div class="what"><b>${esc(i.what)}</b> @ <span class="num">${i.odds.toFixed(2)}</span>${i.book ? ` <span class="bk">${esc(i.book)}</span>` : ''}<small>${esc(i.gm.away.short)} at ${esc(i.gm.home.short)} · ${esc(i.gm.tip)} · model ${pct(i.p)}${i.bk ? ` · backup ${esc(i.bk.name)} ${esc(i.bk.what)} @ ${i.bk.odds.toFixed(2)} (${sgn(i.bk.e)})` : ''}</small></div>${sigBars(i.bars)}<span class="chip good">+${pct(i.e, 1)}${stakeTag(i)}</span></li>`).join('');
     return;
   }
   const rules = DATA.games.filter(g => (g.flags || []).some(x => x.kind === 'rule'));
@@ -865,7 +884,7 @@ function wire(card, gm) {
     if (t.dataset.odds) {
       store.set(`${gm.id}:${t.dataset.odds}`, t.value);
       const key = t.dataset.odds.split(':')[1];
-      $(`[data-val="${t.dataset.odds}"]`, card).innerHTML = valueHTML(verdict({ win: gm[key].win, push: 0 }, +t.value), +t.value, bookOf(gm, 'h2h', key));
+      $(`[data-val="${t.dataset.odds}"]`, card).innerHTML = valueHTML(verdict({ win: gm[key].win, push: 0 }, +t.value), +t.value, bookOf(gm, 'h2h', key), backupHTML(gm, 'h2h', key));
       setStake($(`[data-stake="${t.dataset.odds}"]`, card), { win: gm[key].win, push: 0 }, +t.value);
       best();
     } else if (t.matches('[data-altodds]')) {
@@ -989,7 +1008,7 @@ function refreshEdge() {
       const q = { win: gm[key].win, push: 0 };
       $(`[data-take="${key}"]`, card).textContent = fmtOdds(takeOdds(q));
       const odds = +store.get(`${gm.id}:h2h:${key}`, '');
-      $(`[data-val="h2h:${key}"]`, card).innerHTML = valueHTML(verdict(q, odds), odds, bookOf(gm, 'h2h', key));
+      $(`[data-val="h2h:${key}"]`, card).innerHTML = valueHTML(verdict(q, odds), odds, bookOf(gm, 'h2h', key), backupHTML(gm, 'h2h', key));
       setStake($(`[data-stake="h2h:${key}"]`, card), q, odds);
     });
     renderAlt(card, gm);
