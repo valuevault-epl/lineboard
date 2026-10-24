@@ -18,9 +18,9 @@
 :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0}[hidden]{display:none!important}</style>
 <script>
-// The predictions built into this page are from 2026-10-24T06:09:34Z. If the app has since fetched newer ones
+// The predictions built into this page are from 2026-10-24T06:37:54Z. If the app has since fetched newer ones
 // (saved below by the update check), start from those instead.
-window.__lbBuilt = '2026-10-24T06:09:34Z';
+window.__lbBuilt = '2026-10-24T06:37:54Z';
 window.__lbFresh = function () {
   try {
     var s = JSON.parse(localStorage.getItem('lineboard:fresh') || 'null');
@@ -331,7 +331,7 @@ footer { color: var(--muted); font-size: 12px; display: grid; gap: 4px; }
   </header>
   <div class="banner" id="banner" hidden></div>
   <div class="rail">
-    <section class="panel" aria-labelledby="best-h"><h2 id="best-h">Best value from your prices</h2><a href="value.html" style="display:inline-block;margin:0 0 10px;padding:8px 14px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font:600 13px/1.2 var(--body);text-decoration:none">Get live bookie odds &rarr;</a><p class="small playbook" id="playbook" hidden></p><ul class="bestlist" id="best"></ul></section>
+    <section class="panel" aria-labelledby="best-h"><h2 id="best-h">Best value from your prices</h2><a href="value.html" style="display:inline-block;margin:0 0 10px;padding:8px 14px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font:600 13px/1.2 var(--body);text-decoration:none">Get live bookie odds &rarr;</a><p class="small playbook" id="playbook" hidden></p><p class="small playbook" id="sharednote" hidden></p><ul class="bestlist" id="best"></ul></section>
   </div>
   <div class="filter" id="filter">
     <input id="q" type="search" placeholder="Find a team" aria-label="Find a team" autocomplete="off">
@@ -843,6 +843,7 @@ function stakeTag(i) {
   return k && k.units > 0 ? ` · ${fmtU(k.units)}u` : '';
 }
 function best() {
+  sharedNote();
   const items = [];
   for (const gm of DATA.games) {
     for (const key of ['away', 'home']) {
@@ -1062,9 +1063,68 @@ $('.tabs').addEventListener('keydown', e => {
   setLeague(n);
   $(`#tab-${n}`).focus();
 });
+// ---- bookie prices from the latest odds check, on every device ----
+// The phone's odds check page saves its best prices (bookie, line, Sportsbet/TAB/Betfair backup) to odds.json. Any
+// price box you haven't typed into yourself is filled from it: empty boxes, and boxes holding an earlier filled
+// price (bookie saved, price unchanged). A copy is built into the page; the website also fetches the latest.
+const SHARED_ODDS_BUILT = null;
+const SHARED_ODDS_URL = 'https://raw.githubusercontent.com/valuevault-epl/lineboard-requests/odds/odds.json';
+let SHARED = null;
+function applySharedOdds(snap) {
+  if (!snap || !snap.at || !snap.leagues || (SHARED && snap.at <= SHARED.at)) return false;
+  const free = (val, book) => val === '' || val === null || val === undefined || (book && +book.odds === +val && String(book.at || '') < snap.at);
+  let changed = false;
+  for (const lg of Object.keys(snap.leagues)) {
+    for (const gm of (LEAGUES[lg] || {}).games || []) {
+      const e = snap.leagues[lg][gm.id];
+      if (!e || Date.parse(gm.tip_iso) <= Date.now()) continue;
+      for (const side of ['home', 'away']) {
+        const x = e.h2h && e.h2h[side];
+        if (!x || !free(store.get(`${gm.id}:h2h:${side}`, ''), store.get(`${gm.id}:h2h:${side}:book`, null))) continue;
+        store.set(`${gm.id}:h2h:${side}`, x.odds);
+        store.set(`${gm.id}:h2h:${side}:book`, { name: x.name, odds: x.odds, alt: x.alt || null, at: snap.at });
+        changed = true;
+      }
+      for (const [m, key] of [['line', 'alt'], ['total', 'tot']]) {
+        const x = e[m], st = store.get(`${gm.id}:${key}`, null);
+        const b = st && st.book && st.book.side === st.side && Math.abs(st.book.line - st.line) < 1e-9 ? st.book : null;
+        if (!x || !free(st ? st.odds : '', b)) continue;
+        const ns = { side: x.side, line: x.line, odds: x.odds };
+        store.set(`${gm.id}:${key}`, Object.assign({ book: Object.assign({ name: x.name, alt: x.alt || null, at: snap.at }, ns) }, ns));
+        changed = true;
+      }
+    }
+  }
+  SHARED = snap;
+  return changed;
+}
+function sharedNote() {
+  const el = $('#sharednote');
+  if (!el) return;
+  const has = SHARED && SHARED.leagues[LEAGUE] && Object.keys(SHARED.leagues[LEAGUE]).length;
+  el.hidden = !has;
+  if (has) el.textContent = `Bookie prices from your latest odds check (${new Date(SHARED.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}). A price you type yourself is kept.`;
+}
+applySharedOdds(SHARED_ODDS_BUILT);
+applySharedOdds(store.get('shared_odds', null));      // a newer one fetched on an earlier visit
+let sharedChecked = 0;
+async function fetchSharedOdds() {
+  if (Date.now() - sharedChecked < 60e3) return;
+  sharedChecked = Date.now();
+  try {
+    const r = await fetch(SHARED_ODDS_URL + '?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const snap = await r.json();
+    if (SHARED && snap.at <= SHARED.at) return;
+    store.set('shared_odds', snap);
+    if (applySharedOdds(snap)) render(); else sharedNote();
+  } catch (e) {}                                      // the claude.ai board can't fetch: it uses the built-in copy
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') fetchSharedOdds(); });
 const wanted = (location.hash || '').slice(1).toLowerCase();
 const saved = store.get('league', 'nbl');
 setLeague(LEAGUES[wanted] ? wanted : LEAGUES[saved] ? saved : ['nbl', 'nba', 'nfl'].find(k => LEAGUES[k]) || 'nbl');
+fetchSharedOdds();
 </script>
 
 <script>
