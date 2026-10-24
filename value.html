@@ -87,6 +87,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .valuelist li.none { background: var(--surface-2); color: var(--muted); font-size: 13px; display: block; }
 .valuelist b { font-weight: 700; }
 .valuelist small { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.valuelist small.alt2, .opt .alt2 { color: var(--ink); }
 .valuelist .num { text-align: right; font-family: var(--mono); }
 .valuelist .num b { color: var(--good); font-size: 17px; display: block; }
 .valuelist .num small { white-space: nowrap; }
@@ -171,6 +172,8 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 // ---- set-up -------------------------------------------------------------------------------------
 const BOOKS = [['tab', 'TAB'], ['sportsbet', 'Sportsbet'], ['betfair_ex_au', 'Betfair'], ['pointsbetau', 'PointsBet'], ['ladbrokes_au', 'Ladbrokes'], ['neds', 'Neds']];
 const BOOK_NAME = Object.fromEntries(BOOKS);
+// When the best price is at PointsBet, Ladbrokes or Neds, the best of these is shown as well
+const MAIN_BOOKS = ['sportsbet', 'tab', 'betfair_ex_au'];
 const BOOK_SHORT = { tab: 'TAB', sportsbet: 'SB', betfair_ex_au: 'BF', pointsbetau: 'PB', ladbrokes_au: 'LB', neds: 'Neds' };
 const SPORT = { nbl: 'basketball_nbl', nba: 'basketball_nba', nfl: 'americanfootball_nfl', cfb: 'americanfootball_ncaaf' };
 const LNAME = { nbl: 'NBL', nba: 'NBA', nfl: 'NFL', cfb: 'CFB' };
@@ -546,8 +549,11 @@ function bestOf(G) {
       });
       if (!opts.length) continue;
       opts.sort((a, b) => b.ev - a.ev || b.eff - a.eff);
+      // Every bookmaker's own line is scored at that line, so a better number (a higher line for an under, say)
+      // wins over a slightly bigger price on a worse number
       const top = opts[0];
-      out.push({ market, side, top, all: opts, take: takeOdds(top.q, edge), value: top.ev >= edge });
+      const alt = MAIN_BOOKS.includes(top.book) ? null : (opts.find(o => MAIN_BOOKS.includes(o.book)) || false);
+      out.push({ market, side, top, alt, all: opts, take: takeOdds(top.q, edge), value: top.ev >= edge });
     }
   }
   return out;
@@ -555,8 +561,18 @@ function bestOf(G) {
 
 // ---- drawing --------------------------------------------------------------------------------------
 let LAST = null;    // { at, credits, leagues: { lg: { games: [{g, opts}], unmatched, started } } }
-const selLabel = (g, r) => r.market === 'total' ? `${r.side === 'over' ? 'Over' : 'Under'} ${r.top.point.toFixed(1)}`
-  : `${g[r.side].short}${r.market === 'line' ? ' ' + lineLabel(r.top.point) : ''}`;
+const optLabel = (g, market, side, point) => market === 'total' ? `${side === 'over' ? 'Over' : 'Under'} ${point.toFixed(1)}`
+  : `${g[side].short}${market === 'line' ? ' ' + lineLabel(point) : ''}`;
+const selLabel = (g, r) => optLabel(g, r.market, r.side, r.top.point);
+// The backup at Sportsbet, TAB or Betfair when the best price is elsewhere
+function altText(lg, g, r, edge) {
+  if (r.alt === null) return '';
+  if (r.alt === false) return 'No Sportsbet, TAB or Betfair price for this one.';
+  const a = r.alt, st = stake(lg, a.q, a.eff, r.market, edge);
+  return `Or at ${BOOK_NAME[a.book]}: ${optLabel(g, r.market, r.side, a.point)} @ ${fmtOdds(a.eff)}` +
+    `${a.book === 'betfair_ex_au' ? ' after commission' : ''} · expected return ${signed(a.ev)}` +
+    (st > 0 ? ` · stake ${st}u` : a.ev < edge ? ' · below your minimum edge' : '');
+}
 const mktLabel = { h2h: 'Head to head', line: 'Line', total: 'Total' };
 function chip(ev, edge) {
   if (ev >= edge) return `<span class="chip good">Value ${signed(ev)}</span>`;
@@ -566,7 +582,8 @@ function chip(ev, edge) {
 function booksLine(r) {
   const seen = new Set();
   return r.all.filter(o => { const k = o.book + '|' + o.point; if (seen.has(k)) return false; seen.add(k); return true; })
-    .map(o => `${BOOK_SHORT[o.book]} ${r.market === 'h2h' ? '' : (r.market === 'line' ? lineLabel(o.point) : o.point.toFixed(1)) + ' @'}${fmtOdds(o.price)}`).join(' · ');
+    .map(o => `${BOOK_SHORT[o.book]} ${r.market === 'h2h' ? '' : (r.market === 'line' ? lineLabel(o.point) : o.point.toFixed(1)) + ' @'}${fmtOdds(o.price)}` +
+      (r.market === 'h2h' ? '' : ` (${signed(o.ev)})`)).join(' · ');
 }
 function render() {
   const box = $('#results');
@@ -589,7 +606,7 @@ function render() {
       const st = stake(lg, r.top.q, r.top.eff, r.market, edge);
       return `<li><div><b>${esc(selLabel(g, r))}</b> <span class="small">${mktLabel[r.market]}</span>
           <small>${esc(g.away.short)} @ ${esc(g.home.short)} · ${esc(g.tip)}</small>
-          <small>Model ${pct(r.top.q.win / Math.max(1e-9, 1 - r.top.q.push), 1)} · take at ${fmtOdds(r.take)} · expected return ${signed(r.top.ev)}${st > 0 ? ` · stake ${st}u` : ''}</small></div>
+          <small>Model ${pct(r.top.q.win / Math.max(1e-9, 1 - r.top.q.push), 1)} · take at ${fmtOdds(r.take)} · expected return ${signed(r.top.ev)}${st > 0 ? ` · stake ${st}u` : ''}</small>${r.alt !== null ? `<small class="alt2">${esc(altText(lg, g, r, edge))}</small>` : ''}</div>
         <div class="num"><b>${fmtOdds(r.top.eff)}</b><small>${BOOK_NAME[r.top.book]}</small></div></li>`;
     }).join('') : `<li class="none">No price clears your ${pct(edge, 1).replace('.0%', '%')} minimum edge right now.</li>`;
     const games = rows.map(({ G, best }) => {
@@ -600,6 +617,7 @@ function render() {
         return `<div class="mk"><h4>${mktLabel[m]}</h4>${rs.map(r => `<div class="opt">
             <span class="sel">${esc(selLabel(g, r))}</span>${chip(r.top.ev, edge)}
             <span class="px">Best <b>${fmtOdds(r.top.eff)}</b> ${BOOK_NAME[r.top.book]}${r.top.book === 'betfair_ex_au' ? ` (${fmtOdds(r.top.price)} before commission)` : ''} · take at ${fmtOdds(r.take)}</span>
+            ${r.value && r.alt !== null ? `<span class="px alt2">${esc(altText(lg, g, r, edge))}</span>` : ''}
             <span class="books">${booksLine(r)}</span></div>`).join('')}</div>`;
       };
       return `<details class="game"${nv ? ' open' : ''}><summary><span>${esc(g.away.short)} @ ${esc(g.home.short)}</span><span class="small">${esc(g.tip)}${nv ? ` · <b style="color:var(--good)">${nv} value</b>` : ''}</span></summary>
