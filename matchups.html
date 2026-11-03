@@ -226,6 +226,7 @@ const prefs = Object.assign({ win: 'season', measure: 'raw', more: false, stat: 
   venue: 'all', script: 'all', lbSide: 'def', lbStat: 'pts', lbPos: 'PG', lbWin: 'season', lbMeasure: 'raw', lbDir: 'desc',
   lbTeamSort: 'pace', spotStat: 'pts', spotKey: 'boost', spotDir: 'top' }, (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch (e) { return {}; } })());
 const save = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) {} };
+if (prefs.v !== 2) { prefs.measure = 'tonight'; prefs.lbSide = 'tonight'; prefs.v = 2; save(); }
 
 let IDX = null;
 const TEAMFILES = {};
@@ -334,6 +335,41 @@ function heatRank(rank, of) {
   return wash((mid - rank) / (mid - 1));
 }
 
+// tonight: each defence's effect with tonight's lineup (team record + defenders in/out, see matchups.py), and what
+// each team's own players at a position are projected to score
+const tonightEff = (gid, team, pos, st) => ((((IDX.tonight || {})[gid] || {})[team] || {})[pos] || {})[st];
+function baseLg(pos, st) {                       // league average per team-game at a position: this season once enough games
+  const n = Object.values((IDX.dvp.n || {}).season || {}).reduce((a, b) => a + b, 0) / 2;
+  return lgAvg(n >= 150 ? 'season' : 'last', pos, st);
+}
+function tonightDefValue(gid, team, pos, st) {
+  if (pos === 'ALL') return IDX.positions.reduce((t, p) => t + (tonightDefValue(gid, team, p, st) || 0), 0);
+  const e = tonightEff(gid, team, pos, st), b = baseLg(pos, st);
+  return e == null || b == null ? null : b * (1 + e);
+}
+function tonightOffValue(gid, team, pos, st) {
+  const pls = playersOf(team, gid).filter(p => (pos === 'ALL' || p.pos === pos) && p.g.p > 0);
+  return pls.reduce((t, p) => t + (projOf(p, gid, st) || 0) * (p.g.p ?? 1), 0);
+}
+function tonightValues(kind, pos, st) {           // one value per team on the slate (its first game)
+  const key = ['tonight', kind, pos, st, prefs.scn].join('|');
+  if (_rk[key]) return _rk[key];
+  const vals = {};
+  for (const g of IDX.games) for (const t of [g.home, g.away]) {
+    if (t in vals) continue;
+    const v = kind === 'def' ? tonightDefValue(g.id, t, pos, st) : tonightOffValue(g.id, t, pos, st);
+    if (v != null) vals[t] = { v, gid: g.id };
+  }
+  return (_rk[key] = vals);
+}
+function tonightRank(kind, gid, team, pos, st) {
+  const v = kind === 'def' ? tonightDefValue(gid, team, pos, st) : tonightOffValue(gid, team, pos, st);
+  if (v == null) return null;
+  let rank = 1, of = 1;
+  for (const [t, x] of Object.entries(tonightValues(kind, pos, st))) if (t !== team) { of++; if (x.v > v) rank++; }
+  return { v, rank, of };
+}
+
 // ------------------------------------------------------------------------------------------------
 // players
 // ------------------------------------------------------------------------------------------------
@@ -426,7 +462,7 @@ function bestMatchups(team, opp, gid, n = 3) {
   for (const pos of IDX.positions) {
     if (!pls.some(p => p.pos === pos)) continue;
     for (const st of ['pts', 'reb', 'ast', 'tpm']) {
-      const e = grade(opp, pos, st);
+      const e = tonightEff(gid, opp, pos, st) ?? grade(opp, pos, st);
       if (e != null) out.push({ team, pos, st, e });
     }
   }
@@ -479,6 +515,23 @@ function showGames() {
 // ------------------------------------------------------------------------------------------------
 function gridTable(g, team, opp) {
   const stats = prefs.more ? [...GRID_STATS, ...MORE_STATS] : GRID_STATS;
+  if (prefs.measure === 'tonight' || prefs.measure === 'offt') {
+    const def = prefs.measure === 'tonight', who = def ? opp : team;
+    let t = `<div class="tw"><table class="mgrid"><thead><tr><th class="pos">Pos</th>${stats.map(s => `<th class="n">${STAT[s].short}</th>`).join('')}</tr></thead><tbody>`;
+    for (const pos of IDX.positions) {
+      t += `<tr><td class="pos">${pos}</td>`;
+      for (const st of stats) {
+        const R = tonightRank(def ? 'def' : 'off', g.id, who, pos, st);
+        const e = def ? tonightEff(g.id, opp, pos, st) : null;
+        const v = R ? fmt(R.v, 1) : '–';
+        t += `<td class="cell" style="${heatRank(R && R.rank, R && R.of)}" data-pos="${pos}" data-st="${st}" tabindex="0"
+          aria-label="${esc(who)} ${def ? 'would concede' : 'project to score'} ${v} ${STAT[st].label} to ${POS_NAME[pos]} tonight${R ? ', ' + ord(R.rank) + ' of ' + R.of : ''}">
+          <span class="v">${v}</span><span class="r">${R ? ord(R.rank) : ''}${e != null ? ` · ${sgn(100 * e, 0)}%` : ''}</span></td>`;
+      }
+      t += '</tr>';
+    }
+    return t + '</tbody></table></div>';
+  }
   const off = prefs.measure === 'off';
   const side = off ? 'off' : 'def';
   const who = off ? team : opp;
@@ -503,11 +556,14 @@ function showGame(gid) {
   const g = gameById(gid);
   if (!g) { view.innerHTML = `<div class="banner">That game isn't on the current slate. <a href="#/">Back to games</a></div>`; return; }
   const b = g.blowout;
+  const nTeams = new Set(IDX.games.flatMap(x => [x.home, x.away])).size;
   const sideHtml = (team, opp) => {
-    const off = prefs.measure === 'off';
-    return `<section class="panel"><h2>${esc(team)} players ${off ? `· what ${esc(team)} scores by position` : `vs ${esc(opp)} defence`}</h2>
+    const off = prefs.measure === 'off' || prefs.measure === 'offt';
+    return `<section class="panel"><h2>${esc(team)} players ${off ? `· what ${esc(team)} ${prefs.measure === 'offt' ? 'project to score tonight' : 'score'} by position` : `vs ${esc(opp)} defence${prefs.measure === 'tonight' ? ' tonight' : ''}`}</h2>
       ${gridTable(g, team, opp)}
-      <p class="note">${off ? `Per game by ${esc(team)}'s own players at each position, rank 1st = scores the most.`
+      <p class="note">${prefs.measure === 'tonight' ? `What ${esc(opp)} would concede per game to each position with <b>tonight's lineup</b> (injuries, rest and trades allowed for): the league average &times; their matchup effect (the %). Rank among the ${nTeams} teams playing, 1st = gives up the most.`
+        : prefs.measure === 'offt' ? `Tonight's projections for ${esc(team)}'s players at each position added up (minutes, injuries and the game-script switch allowed for). Rank among the ${nTeams} teams playing, 1st = the most.`
+        : off ? `Per game by ${esc(team)}'s own players at each position, rank 1st = scores the most.`
         : prefs.measure === 'adj' ? `How many more (+) or fewer (−) than their usual the ${esc(opp)} defence gives each position per game, rank 1st = gives the most.`
         : `Per game that ${esc(opp)} concede to each position, rank 1st = concedes the most.`} Tap a cell for the players.</p></section>`;
   };
@@ -549,13 +605,20 @@ function showGame(gid) {
     </section>
     <section class="panel"><h2>Injuries</h2><div class="kv"><b style="min-width:40px">${esc(g.away)}</b> ${injuries(g.away)}</div><div class="kv" style="margin-top:6px"><b style="min-width:40px">${esc(g.home)}</b> ${injuries(g.home)}</div>
       ${IDX.injuries ? `<p class="note">${esc(IDX.injuries)}</p>` : ''}</section>
+    <section class="panel"><h2>Defensive lineup changes vs their record</h2>
+      ${[g.away, g.home].map(t => {
+        const rows = (g.def_changes || {})[t] || [];
+        return `<div class="kv" style="margin:4px 0"><b style="min-width:40px">${esc(t)}</b>${rows.length ? rows.map(r => `<span class="badge" title="${esc(r.name)}: ${r.dmin > 0 ? '+' : ''}${r.dmin} min vs the lineups behind ${esc(t)}'s record">${esc(r.name)} ${r.dmin > 0 ? '+' : ''}${r.dmin} min: ${r.top.map(([pos, st, v]) => `<span class="${v > 0 ? 'up' : 'down'}">opp ${pos} ${STAT[st].short} ${sgn(100 * v, 1)}%</span>`).join(', ')}</span>`).join(' ') : '<span class="small">No defender changes big enough to matter</span>'}</div>`;
+      }).join('')}
+      <p class="note">Each defender has a rating per opposing position and stat (a ridge regression like the win model's RAPM). Tonight's matchups start from the team's record, then add the ratings of defenders playing more or less than in the games behind that record (injuries, rest, trades): + = the opposing position gets more. Small by design: defence vs position is mostly team scheme, and in 2024-26 tests the adjustment improved the matchup numbers only slightly.</p>
+    </section>
     <div class="bar">
-      <span class="lab">Show</span>${seg('measure', [['raw', 'Conceded'], ['adj', 'vs usual'], ['off', 'Team scores']], prefs.measure)}
-      <span class="lab">Games</span>${seg('win', WINDOWS, prefs.win)}
+      <span class="lab">Show</span>${seg('measure', [['tonight', 'Tonight\'s defence'], ['offt', 'Tonight\'s offence'], ['raw', 'Conceded (history)'], ['adj', 'vs usual (history)'], ['off', 'Scored (history)']], prefs.measure)}
+      ${prefs.measure === 'tonight' || prefs.measure === 'offt' ? '' : `<span class="lab">Games</span>${seg('win', WINDOWS, prefs.win)}`}
       ${seg('more', [['0', 'Main stats'], ['1', '+ STL/BLK']], prefs.more ? '1' : '0')}
     </div>
     <div class="legend"><span><i class="sw" style="background:var(--more)"></i>more than average (overs)</span><span><i class="sw" style="background:var(--less)"></i>less (unders)</span>
-      <span>Colour = the cell's rank: deepest green 1st (gives up the most), fading to none at 15th–16th, deepest red 30th. The % is the matchup effect the projections use (“vs usual”, shrunk for sample size).</span></div>
+      <span>Colour = the cell's rank: deepest green 1st (gives up / scores the most), fading to none mid-table, deepest red last. The % is tonight's matchup effect the projections use: the team's record (“vs usual”, shrunk for sample size) adjusted for tonight's defenders.</span></div>
     <div class="grid2">${sideHtml(g.away, g.home)}${sideHtml(g.home, g.away)}</div>
     ${scnBar(g, 'game')}
     <div class="grid2">${plTable(g.away)}${plTable(g.home)}</div>`;
@@ -578,7 +641,9 @@ async function showMatchup(gid, team, pos, stat) {
   const g = gameById(gid);
   if (!g || !STAT[stat]) { location.hash = '#/'; return; }
   const opp = team === g.home ? g.away : g.home;
-  const e = grade(opp, pos, stat);
+  const e0 = grade(opp, pos, stat), et = tonightEff(gid, opp, pos, stat);
+  const e = et ?? e0;
+  const TR = tonightRank('def', gid, opp, pos, stat);
   const rowsW = WINDOWS.map(([w, lab]) => {
     const R = rankTable('def', w, pos, stat, 'raw')[opp], A = rankTable('def', w, pos, stat, 'adj')[opp];
     const n = ((IDX.dvp.n || {})[w] || {})[opp];
@@ -591,7 +656,9 @@ async function showMatchup(gid, team, pos, stat) {
     <div class="crumbs"><a href="#/">Games</a> › <a href="#/g/${gid}">${esc(g.away)} @ ${esc(g.home)}</a> › <span>${esc(team)} ${pos} · ${STAT[stat].short}</span></div>
     <section class="panel"><h2>${esc(IDX.teams[opp] || opp)} vs ${POS_NAME[pos]} · ${STAT[stat].label}</h2>
       <div class="tiles"><div class="tile" style="${heat(e)}"><div class="l">Matchup effect used tonight</div><div class="v">${e == null ? '–' : sgn(100 * e, 1) + '%'}</div>
-        <div class="d">vs what ${pos}s usually get, after sample-size shrinkage</div></div>
+        <div class="d">team record ${e0 == null ? '–' : sgn(100 * e0, 1) + '%'} · tonight's defender changes ${et == null || e0 == null ? '–' : sgn(100 * (et - e0), 1) + '%'}</div></div>
+        <div class="tile" style="${heatRank(TR && TR.rank, TR && TR.of)}"><div class="l">Tonight's lineup concedes</div><div class="v">${TR ? fmt(TR.v) : '–'}</div>
+        <div class="d">per game to ${pos}s vs an average lineup · ${TR ? ord(TR.rank) + ' of ' + TR.of + ' teams playing' : ''}</div></div>
         <div class="tile"><div class="l">Built from</div><div class="v" style="font-size:18px">${(() => { const a = rankTable('def', 'season', pos, stat, 'adj')[opp], l = rankTable('def', 'last', pos, stat, 'adj')[opp], n = ((IDX.dvp.n || {}).season || {})[opp], nl = ((IDX.dvp.n || {}).last || {})[opp]; return `this season ${a ? sgn(a.v) : '–'} vs usual (${n ?? 0} g) · last season ${l ? sgn(l.v) : '–'} (${nl ?? 0} g, half weight)`; })()}</div>
         <div class="d">per game, then shrunk toward average by 60 team-games</div></div></div>
       <div class="tw" style="margin-top:10px"><table><thead><tr><th>Games</th><th class="n">GP</th><th class="n">Conceded / game</th><th class="n">League avg</th><th class="n">vs usual</th></tr></thead><tbody>${rowsW}</tbody></table></div>
@@ -710,8 +777,8 @@ async function showPlayer(pid, gid) {
     const mSel = pAtLeast(stat, mu, PV.k);
     // matchup chips for his position vs tonight's opponent
     const mchips = ['pts', 'reb', 'ast', 'tpm', 'pra'].map(s => {
-      const R = rankTable('def', prefs.win, pl.pos, s, 'raw')[opp];
-      const e = grade(opp, pl.pos, s);
+      const R = tonightRank('def', gid, opp, pl.pos, s);
+      const e = tonightEff(gid, opp, pl.pos, s);
       return `<a class="mchip ${e != null && e < 0 ? 'cold' : ''}" href="#/g/${gid}/m/${pl.team}/${pl.pos}/${s}" style="text-decoration:none;color:inherit"><i></i>${STAT[s].short} ${R ? ord(R.rank) : '–'} ${e != null ? `(${sgn(100 * e, 0)}%)` : ''}</a>`;
     }).join('');
     const myBlow = logs.filter(r => r[C.margin] != null && Math.abs(r[C.margin]) >= 20), myClose = logs.filter(r => r[C.margin] != null && Math.abs(r[C.margin]) < 10);
@@ -886,7 +953,23 @@ function tonight(team) {
 function showBoards() {
   const side = prefs.lbSide;
   let body = '';
-  if (side === 'team') {
+  if (side === 'tonight' || side === 'tonightoff') {
+    const kind = side === 'tonight' ? 'def' : 'off';
+    const vals = tonightValues(kind, prefs.lbPos, prefs.lbStat);
+    const rows = Object.entries(vals).map(([t, x]) => ({ t, ...x })).sort((a, b) => b.v - a.v).map((r, i, a) => ({ ...r, rank: i + 1, of: a.length }));
+    if (prefs.lbDir === 'asc') rows.reverse();
+    const lg = kind !== 'def' ? null : prefs.lbPos === 'ALL' ? IDX.positions.reduce((t, p) => t + (baseLg(p, prefs.lbStat) || 0), 0) : baseLg(prefs.lbPos, prefs.lbStat);
+    body = `<div class="tw"><table><thead><tr><th>Rank</th><th>Team</th><th class="n">${kind === 'def' ? 'Concedes / game tonight' : 'Projected tonight'}</th>${kind === 'def' && prefs.lbPos !== 'ALL' ? '<th class="n">Effect</th><th class="n">of which lineup</th>' : ''}<th>Game</th></tr></thead><tbody>
+      ${rows.map(r => {
+        const e = kind === 'def' && prefs.lbPos !== 'ALL' ? tonightEff(r.gid, r.t, prefs.lbPos, prefs.lbStat) : null;
+        const e0 = kind === 'def' && prefs.lbPos !== 'ALL' ? grade(r.t, prefs.lbPos, prefs.lbStat) : null;
+        return `<tr><td class="n">${ord(r.rank)}</td><td><b>${esc(r.t)}</b> <span class="sub">${esc(IDX.teams[r.t] || '')}</span></td>
+          <td class="n" style="${heatRank(r.rank, r.of)}"><b>${fmt(r.v)}</b>${lg != null ? `<span class="sub">${sgn(r.v - lg)} vs avg</span>` : ''}</td>
+          ${kind === 'def' && prefs.lbPos !== 'ALL' ? `<td class="n">${e == null ? '–' : sgn(100 * e, 1) + '%'}</td><td class="n">${e == null || e0 == null ? '–' : sgn(100 * (e - e0), 1) + '%'}</td>` : ''}
+          <td>${tonight(r.t)}</td></tr>`;
+      }).join('')}</tbody></table></div>
+      <p class="note">${kind === 'def' ? `What each team playing would concede per game to ${POS_NAME[prefs.lbPos]} with tonight's lineup: the league average &times; its matchup effect (team record + tonight's defenders in or out — injuries, rest, trades). “Of which lineup” = how much tonight's defender changes move it.` : `Tonight's projections for each team's ${POS_NAME[prefs.lbPos]} added up (minutes, injuries and the game-script switch on the other pages allowed for).`} Teams playing twice on the slate show their first game.</p>`;
+  } else if (side === 'team') {
     const keyIdx = { n: 0, pts: 1, opp: 2, pace: 3, ortg: 4, drtg: 5 };
     const sortKey = prefs.lbTeamSort in keyIdx ? prefs.lbTeamSort : 'pace';
     const rows = Object.entries(IDX.team_stats).map(([t, w]) => ({ t, x: w[prefs.lbWin] })).filter(r => r.x);
@@ -917,10 +1000,10 @@ function showBoards() {
         ${prefs.lbWin !== 'last' ? 'Early in the season these swing a lot from game to game.' : ''}</p>`;
   }
   view.innerHTML = `<section class="panel"><h2>Leaderboards</h2>
-    <div class="bar" style="margin-bottom:8px">${seg('lbSide', [['def', 'Conceded (defence)'], ['off', 'Scored (offence)'], ['team', 'Team pace & ratings']], side)}</div>
+    <div class="bar" style="margin-bottom:8px">${seg('lbSide', [['tonight', 'Tonight\'s defence'], ['tonightoff', 'Tonight\'s offence'], ['def', 'Conceded (history)'], ['off', 'Scored (history)'], ['team', 'Team pace & ratings']], side)}</div>
     ${side !== 'team' ? `<div class="bar" style="margin-bottom:8px"><span class="lab">Position</span>${seg('lbPos', [...IDX.positions.map(p => [p, p]), ['ALL', 'All']], prefs.lbPos)}
       <span class="lab">Stat</span>${seg('lbStat', IDX.dvp_stats.map(s => [s, STAT[s].short]), prefs.lbStat)}</div>` : ''}
-    <div class="bar" style="margin-bottom:12px"><span class="lab">Games</span>${seg('lbWin', WINDOWS, prefs.lbWin)}
+    <div class="bar" style="margin-bottom:12px">${side === 'tonight' || side === 'tonightoff' ? '' : `<span class="lab">Games</span>${seg('lbWin', WINDOWS, prefs.lbWin)}`}
       ${side === 'def' ? seg('lbMeasure', [['raw', 'Per game'], ['adj', 'vs usual']], prefs.lbMeasure) : ''}
       ${seg('lbDir', [['desc', 'Most first'], ['asc', 'Least first']], prefs.lbDir)}</div>
     ${body}</section>`;
