@@ -29,9 +29,18 @@ With a GitHub refresh token saved too (Settings, or `#gh=TOKEN` in the same link
 
 `site_builder.py` doesn't touch this file, so model runs won't overwrite it.
 
+## NBA Matchups (matchups.html)
+https://valuevault-epl.github.io/lineboard/matchups.html (button on the board's NBA tab)
+
+What each team concedes and scores by position, blowout chances, every player's projected minutes vs his averages, his
+last 5-40 games and meetings with tonight's opponent, and the model's chance and hit rates at any line. The data
+(`matchups/index.json` + `matchups/teams/<TEAM>.json`) is written by `NBAModel/matchups.py` on every NBA run and copied
+here by `site_builder.py`; the page itself is only changed by hand. How it was checked: NBAModel README, "Matchups page".
+
 ## Files
 * `index.html`: the board, with that week's predictions inside it (used when opening offline).
 * `data.json`: the same predictions with a timestamp, which the app checks for updates.
 * `manifest.webmanifest` and `icons/`: name, colours and home-screen icon.
 * `sw.js`: offline cache. It opens the saved copy at once and refreshes it in the background. Each page (the board, the odds check) keeps its own saved copy.
 * `value.html`: the odds check (see above).
+* `matchups.html` and `matchups/`: the NBA Matchups page and its data (see above).
