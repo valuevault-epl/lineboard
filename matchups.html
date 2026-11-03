@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NBA Matchups · Line Board</title>
 <meta name="description" content="What every NBA team concedes and scores by position, blowout chances, projected minutes, player game logs and hit rates for any line.">
-<meta name="theme-color" content="#eceff6" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f1f1f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -17,8 +17,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=Public+Sans:wght@400;500;600;700&display=swap">
 <style>
-/* NBA Matchups. Styled as part of the Line Board's NBA tab: same palette, hardwood background, league tabs,
-   header and game-card headers (away team coral, home team blue).
+/* NBA Matchups. Laid out like the Line Board's NBA tab (league tabs, hardwood lines, header, game-card headers with
+   the away team coral and the home team blue), but on a NEUTRAL charcoal / light-grey background instead of navy so
+   the red and green read cleanly (user's choice, 3 Nov 2026; this page only). Blue is kept for buttons and the home team.
    Heat cells: green = concedes/scores MORE than average (good for overs), red = less (good for unders),
    neutral at the middle. Green/red at the user's request (3 Nov 2026; blue/orange was the colour-blind-safe
    first version). Every cell also carries its number, rank and % so colour is never the only cue. */
@@ -26,10 +27,10 @@
 html { -webkit-text-size-adjust: 100%; }
 [hidden] { display: none !important; }
 :root {
-  --bg: #eceff6; --surface: #ffffff; --surface-2: #f4f6fb; --ink: #121a2c; --muted: #56627a; --line: #d3d9e6;
+  --bg: #f1f1f2; --surface: #ffffff; --surface-2: #f6f6f7; --ink: #16171a; --muted: #5d5f66; --line: #dcdde0;
   --accent: #1d4ea3; --accent-ink: #ffffff; --accent-soft: #dde6f6; --away: #b23a2e; --home: #1d4ea3;
   --nbl: #c94f1c; --nba: #1d4ea3; --nfl: #2a7a3b;
-  --pattern: color-mix(in srgb, var(--accent) 12%, transparent);
+  --pattern: color-mix(in srgb, var(--ink) 7%, transparent);
   --more: #1e9a52; --less: #d13b3b; --more-bg: #1e9a52; --less-bg: #d13b3b; --hit: #1e9a52; --miss: #d13b3b;
   --good: #187a4b; --good-soft: #dcf1e5; --warn: #9a6200; --warn-soft: #fbeed3; --bad: #b0281f; --bad-soft: #f8dfdc;
   --display: 'Big Shoulders Display', 'Arial Narrow', 'Roboto Condensed', sans-serif;
@@ -39,16 +40,16 @@ html { -webkit-text-size-adjust: 100%; }
   padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 @media (prefers-color-scheme: dark) { :root {
-  --bg: #0b1020; --surface: #131a2c; --surface-2: #192236; --ink: #e3e8f3; --muted: #93a0b9; --line: #273250;
-  --accent: #7aa7f5; --accent-ink: #07132b; --accent-soft: #1a2a4d; --away: #f08a7e; --home: #7aa7f5;
+  --bg: #111214; --surface: #1a1b1f; --surface-2: #212329; --ink: #e8e9ec; --muted: #9a9ca3; --line: #2c2e33;
+  --accent: #7aa7f5; --accent-ink: #07132b; --accent-soft: #23314d; --away: #f08a7e; --home: #7aa7f5;
   --nbl: #f07a42; --nba: #7aa7f5; --nfl: #5cc27a;
   --more: #3cc47a; --less: #f0605f; --more-bg: #1f8f4e; --less-bg: #c23b3b; --hit: #3cc47a; --miss: #e0524f;
   --good: #52c690; --good-soft: #143022; --warn: #e3aa40; --warn-soft: #33270f; --bad: #f1786f; --bad-soft: #3b1b19;
   color-scheme: dark; } }
-body { margin: 0; background-color: var(--bg); color: var(--ink); font: 400 15px/1.5 var(--body); border-top: 4px solid var(--accent);
+body { margin: 0; background-color: var(--bg); color: var(--ink); font: 400 15px/1.5 var(--body); border-top: 4px solid color-mix(in srgb, var(--ink) 22%, transparent);
   /* hardwood planks, with staggered board ends (as on the board's NBA tab) */
   background-image: repeating-linear-gradient(0deg, transparent 0 34px, var(--pattern) 34px 35px),
-    repeating-linear-gradient(90deg, transparent 0 239px, color-mix(in srgb, var(--accent) 6%, transparent) 239px 240px);
+    repeating-linear-gradient(90deg, transparent 0 239px, color-mix(in srgb, var(--ink) 4%, transparent) 239px 240px);
   background-attachment: fixed; }
 button, input, select { font: inherit; color: inherit; }
 a { color: var(--accent); }
