@@ -27,7 +27,7 @@ html { -webkit-text-size-adjust: 100%; }
 :root {
   --bg: #eceff6; --surface: #ffffff; --surface-2: #f4f6fb; --ink: #121a2c; --muted: #56627a; --line: #d3d9e6;
   --accent: #1d4ea3; --accent-ink: #ffffff; --accent-soft: #dde6f6;
-  --more: #1e9a52; --less: #d13b3b; --more-bg: #1e9a52; --less-bg: #d13b3b; --hit: #1d4ea3; --miss: #b9c1cf;
+  --more: #1e9a52; --less: #d13b3b; --more-bg: #1e9a52; --less-bg: #d13b3b; --hit: #1e9a52; --miss: #d13b3b;
   --good: #187a4b; --good-soft: #dcf1e5; --warn: #9a6200; --warn-soft: #fbeed3; --bad: #b0281f; --bad-soft: #f8dfdc;
   --display: 'Big Shoulders Display', 'Arial Narrow', 'Roboto Condensed', sans-serif;
   --body: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -38,7 +38,7 @@ html { -webkit-text-size-adjust: 100%; }
 @media (prefers-color-scheme: dark) { :root {
   --bg: #0b1020; --surface: #131a2c; --surface-2: #192236; --ink: #e3e8f3; --muted: #93a0b9; --line: #273250;
   --accent: #7aa7f5; --accent-ink: #07132b; --accent-soft: #1a2a4d;
-  --more: #3cc47a; --less: #f0605f; --more-bg: #1f8f4e; --less-bg: #c23b3b; --hit: #7aa7f5; --miss: #3a4562;
+  --more: #3cc47a; --less: #f0605f; --more-bg: #1f8f4e; --less-bg: #c23b3b; --hit: #3cc47a; --miss: #e0524f;
   --good: #52c690; --good-soft: #143022; --warn: #e3aa40; --warn-soft: #33270f; --bad: #f1786f; --bad-soft: #3b1b19;
   color-scheme: dark; } }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 400 14px/1.45 var(--body); }
@@ -136,9 +136,12 @@ th.sort[aria-sort] { color: var(--ink); }
 .phead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
 .phead h2 { margin: 0; font: 800 34px/1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
 .ladder td.line { font-weight: 700; white-space: nowrap; }
-.ladder tr.sel td { background: var(--accent-soft); }
-.ladder td.hl, .ladder th.hl { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
-.ladder td .k { display: block; font-size: 10.5px; color: var(--muted); font-family: var(--mono); }
+.ladder tr.sel td { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+.ladder tr.sel td.line { background: var(--accent-soft); }
+.ladder td.hl { font-weight: 700; }
+.ladder th.hl { color: var(--ink); background: var(--accent-soft); border-radius: 6px 6px 0 0; }
+td.hit-y { color: var(--good); font-weight: 700; } td.hit-n { color: var(--bad); font-weight: 700; }
+.ladder td .k { display: block; font-size: 10.5px; color: color-mix(in srgb, var(--ink) 72%, transparent); font-family: var(--mono); }
 .oddsbox { display: grid; gap: 8px; }
 .oddsout { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; }
 .oddsout b { font-family: var(--mono); }
@@ -329,6 +332,8 @@ function wash(t) {
 // a matchup effect (fraction above/below what those players usually do): +-10% = full strength
 const heat = e => e == null || !isFinite(e) ? '' : wash(e / 0.10);
 // a rank out of `of` teams: 1st = deepest green, last = deepest red, the middle = no colour
+// a chance (0-1): green above 50%, red below, no colour near 50% (full strength at 90% / 10%)
+const heatP = p => p == null || !isFinite(p) ? '' : wash((p - 0.5) / 0.4);
 function heatRank(rank, of) {
   if (!rank || !(of > 1)) return '';
   const mid = (of + 1) / 2;
@@ -694,7 +699,7 @@ async function showMatchup(gid, team, pos, stat) {
   $('#mu-pl').innerHTML = rows.length ? `<div class="tw"><table><thead><tr><th>Player</th><th class="n">Min</th><th class="n">Proj</th><th class="n">Matchup</th><th class="n">L10 avg</th><th class="n">Line</th><th class="n">Model</th><th class="n">Hit L20</th></tr></thead><tbody>
     ${rows.map(r => `<tr class="click" data-p="${r.p.id}"><td><span class="pname">${esc(r.p.name)}</span> <span class="badge pos">${r.p.pos}</span> ${statusBadge(r.p.g)}</td>
       <td class="n">${minutesText(r.p, r.p.g)}</td><td class="n"><b>${fmt(r.mu)}</b></td><td class="n">${r.boost == null ? '–' : sgn(r.boost)}</td>
-      <td class="n">${fmt(r.l10)}</td><td class="n">${r.k}+</td><td class="n">${pct(r.model)}</td><td class="n">${pct(r.hit)}<span class="sub">${r.hit == null ? '' : Math.round(r.hit * r.n20) + '/' + r.n20}</span></td></tr>`).join('')}
+      <td class="n">${fmt(r.l10)}</td><td class="n">${r.k}+</td><td class="n" style="${heatP(r.model)}">${pct(r.model)}</td><td class="n" style="${heatP(r.hit)}">${pct(r.hit)}<span class="sub">${r.hit == null ? '' : Math.round(r.hit * r.n20) + '/' + r.n20}</span></td></tr>`).join('')}
     </tbody></table></div>` : `<p class="small">No ${esc(team)} ${pos}s are expected to play.</p>`;
   $$('tr[data-p]', view).forEach(tr => tr.addEventListener('click', () => { prefs.stat = stat; save(); location.hash = `#/p/${tr.dataset.p}/${gid}`; }));
 }
@@ -769,8 +774,8 @@ async function showPlayer(pid, gid) {
     const ladder = `<div class="tw"><table class="ladder"><thead><tr><th>Line</th><th class="n">Model</th><th class="n fair">Fair</th>${cols.map(([k, lab]) => `<th class="n ${prefs.sample === k ? 'hl' : ''}">${k === 'opp' ? 'vs ' + esc(opp) : lab}</th>`).join('')}</tr></thead><tbody>
       ${lines.map(k => {
         const m = pAtLeast(stat, mu, k);
-        return `<tr class="click ${k === PV.k ? 'sel' : ''}" data-k="${k}"><td class="line">${k}+ <span class="sub">over ${k - 0.5}</span></td><td class="n"><b>${pct(m)}</b></td><td class="n fair">${m ? fmt(1 / m, 2) : '–'}</td>
-          ${cols.map(([s]) => { const x = hits(sample[s], k); return `<td class="n ${prefs.sample === s ? 'hl' : ''}">${x ? pct(x.p) : '–'}<span class="k">${x ? x.h + '/' + x.n : ''}</span></td>`; }).join('')}</tr>`;
+        return `<tr class="click ${k === PV.k ? 'sel' : ''}" data-k="${k}"><td class="line">${k}+ <span class="sub">over ${k - 0.5}</span></td><td class="n" style="${heatP(m)}"><b>${pct(m)}</b></td><td class="n fair">${m ? fmt(1 / m, 2) : '–'}</td>
+          ${cols.map(([s]) => { const x = hits(sample[s], k); return `<td class="n ${prefs.sample === s ? 'hl' : ''}" style="${x ? heatP(x.p) : ''}">${x ? pct(x.p) : '–'}<span class="k">${x ? x.h + '/' + x.n : ''}</span></td>`; }).join('')}</tr>`;
       }).join('')}</tbody></table></div>`;
     const sel = sample[prefs.sample] || [];
     const selHit = hits(sel, PV.k);
@@ -854,22 +859,23 @@ async function showPlayer(pid, gid) {
     $('#odds').addEventListener('input', oddsOut);
     oddsOut();
     drawChart($('#chart'), f, sel, stat, PV.k, opp);
-    drawLog($('#log'), f, sel, stat, pl.team);
+    drawLog($('#log'), f, sel, stat, pl.team, PV.k);
   };
   render();
 }
 
-function drawLog(el, f, rows, stat, team) {
+function drawLog(el, f, rows, stat, team, k) {
   const C = f.C;
   const r = rows.slice().reverse();
   const base = ['pts', 'reb', 'ast', 'tpm', 'stl', 'blk', 'tov'];
   const combo = !base.includes(stat);
-  const cell = (x, s) => s === stat ? `<b>${x[C[s]]}</b>` : x[C[s]];
+  const hitCls = x => k == null ? '' : val(f, x, stat) >= k ? 'hit-y' : 'hit-n';
+  const cell = (x, s) => s === stat ? x[C[s]] : x[C[s]];
   el.innerHTML = `<table><thead><tr><th>Date</th><th>Opp</th><th class="n">Res</th><th class="n">Min</th>${combo ? `<th class="n">${STAT[stat].short}</th>` : ''}${base.map(s => `<th class="n"${s === stat ? ' style="color:var(--ink)"' : ''}>${STAT[s].short}</th>`).join('')}<th class="n">FG</th><th class="n">3P</th><th class="n">FT</th></tr></thead><tbody>
     ${r.map(x => `<tr><td class="n" style="text-align:left">${dayMonth(x[C.date])}${x[C.date] < SEASON_START ? `<span class="sub">${x[C.date].slice(0, 4)}</span>` : ''}</td>
       <td>${x[C.home] ? 'vs' : '@'} ${esc(x[C.opp])}${x[C.team] !== team ? ` <span class="sub">with ${esc(x[C.team])}</span>` : ''}${x[C.start] ? '' : ' <span class="sub">bench</span>'}</td>
       <td class="n">${x[C.margin] == null ? '–' : (x[C.margin] > 0 ? 'W' : 'L') + ' ' + Math.abs(x[C.margin])}</td><td class="n">${x[C.min]}</td>
-      ${combo ? `<td class="n"><b>${val(f, x, stat)}</b></td>` : ''}${base.map(s => `<td class="n">${cell(x, s)}</td>`).join('')}
+      ${combo ? `<td class="n ${hitCls(x)}">${val(f, x, stat)}</td>` : ''}${base.map(s => `<td class="n ${s === stat ? hitCls(x) : ''}">${cell(x, s)}</td>`).join('')}
       <td class="n">${x[C.fgm]}-${x[C.fga]}</td><td class="n">${x[C.tpm]}-${x[C.tpa]}</td><td class="n">${x[C.ftm]}-${x[C.fta]}</td></tr>`).join('') || '<tr><td colspan="15" class="small">No games in this sample.</td></tr>'}
   </tbody></table>`;
 }
