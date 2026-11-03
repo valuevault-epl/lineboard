@@ -17,7 +17,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=Public+Sans:wght@400;500;600;700&display=swap">
 <style>
-/* NBA Matchups. Same royal-blue NBA palette and type as the Line Board's NBA tab.
+/* NBA Matchups. Styled as part of the Line Board's NBA tab: same palette, hardwood background, league tabs,
+   header and game-card headers (away team coral, home team blue).
    Heat cells: green = concedes/scores MORE than average (good for overs), red = less (good for unders),
    neutral at the middle. Green/red at the user's request (3 Nov 2026; blue/orange was the colour-blind-safe
    first version). Every cell also carries its number, rank and % so colour is never the only cue. */
@@ -26,7 +27,9 @@ html { -webkit-text-size-adjust: 100%; }
 [hidden] { display: none !important; }
 :root {
   --bg: #eceff6; --surface: #ffffff; --surface-2: #f4f6fb; --ink: #121a2c; --muted: #56627a; --line: #d3d9e6;
-  --accent: #1d4ea3; --accent-ink: #ffffff; --accent-soft: #dde6f6;
+  --accent: #1d4ea3; --accent-ink: #ffffff; --accent-soft: #dde6f6; --away: #b23a2e; --home: #1d4ea3;
+  --nbl: #c94f1c; --nba: #1d4ea3; --nfl: #2a7a3b;
+  --pattern: color-mix(in srgb, var(--accent) 12%, transparent);
   --more: #1e9a52; --less: #d13b3b; --more-bg: #1e9a52; --less-bg: #d13b3b; --hit: #1e9a52; --miss: #d13b3b;
   --good: #187a4b; --good-soft: #dcf1e5; --warn: #9a6200; --warn-soft: #fbeed3; --bad: #b0281f; --bad-soft: #f8dfdc;
   --display: 'Big Shoulders Display', 'Arial Narrow', 'Roboto Condensed', sans-serif;
@@ -37,29 +40,43 @@ html { -webkit-text-size-adjust: 100%; }
 }
 @media (prefers-color-scheme: dark) { :root {
   --bg: #0b1020; --surface: #131a2c; --surface-2: #192236; --ink: #e3e8f3; --muted: #93a0b9; --line: #273250;
-  --accent: #7aa7f5; --accent-ink: #07132b; --accent-soft: #1a2a4d;
+  --accent: #7aa7f5; --accent-ink: #07132b; --accent-soft: #1a2a4d; --away: #f08a7e; --home: #7aa7f5;
+  --nbl: #f07a42; --nba: #7aa7f5; --nfl: #5cc27a;
   --more: #3cc47a; --less: #f0605f; --more-bg: #1f8f4e; --less-bg: #c23b3b; --hit: #3cc47a; --miss: #e0524f;
   --good: #52c690; --good-soft: #143022; --warn: #e3aa40; --warn-soft: #33270f; --bad: #f1786f; --bad-soft: #3b1b19;
   color-scheme: dark; } }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 400 14px/1.45 var(--body); }
+body { margin: 0; background-color: var(--bg); color: var(--ink); font: 400 15px/1.5 var(--body); border-top: 4px solid var(--accent);
+  /* hardwood planks, with staggered board ends (as on the board's NBA tab) */
+  background-image: repeating-linear-gradient(0deg, transparent 0 34px, var(--pattern) 34px 35px),
+    repeating-linear-gradient(90deg, transparent 0 239px, color-mix(in srgb, var(--accent) 6%, transparent) 239px 240px);
+  background-attachment: fixed; }
 button, input, select { font: inherit; color: inherit; }
 a { color: var(--accent); }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 14px 14px 60px; display: grid; gap: 14px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 18px; }
 .wrap > *, #view > * { min-width: 0; }
-#view { display: grid; gap: 14px; }
+#view { display: grid; gap: 16px; }
 .small { font-size: 12px; color: var(--muted); }
 .mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* header + nav */
-.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 18px; }
-.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-h1 { margin: 4px 0 0; font: 800 clamp(32px, 7vw, 50px)/0.95 var(--display); letter-spacing: .01em; text-transform: uppercase; }
-h1 span { color: var(--accent); }
-.back { display: inline-flex; align-items: center; gap: 6px; padding: 7px 13px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); text-decoration: none; font-weight: 600; font-size: 13px; }
-.tabs { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); justify-self: start; flex-wrap: wrap; }
-.tabs a { border-radius: 999px; padding: 8px 14px 7px; text-decoration: none; font: 800 17px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+.top { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: end; justify-content: space-between; }
+.eyebrow { font: 600 11px/1.2 var(--body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.brand h1 { font: 800 clamp(34px, 6vw, 52px)/0.95 var(--display); letter-spacing: .01em; text-transform: uppercase; }
+.brand h1 span { color: var(--accent); }
+.brand p { margin: 6px 0 0; color: var(--muted); font-size: 13px; max-width: 62ch; }
+.tabs { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); justify-self: start; }
+.tabs a { border-radius: 999px; padding: 8px 16px 7px; display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+  font: 800 18px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.tabs.league a { padding-left: 12px; }
+.tabs.league a::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); }
+.tabs a[data-league="nbl"] { --dot: var(--nbl); } .tabs a[data-league="nba"] { --dot: var(--nba); } .tabs a[data-league="nfl"] { --dot: var(--nfl); }
 .tabs a[aria-current="page"] { background: var(--accent); color: var(--accent-ink); }
+.tabs a[aria-current="page"]::before { background: var(--accent-ink); }
+.tabs a:not([aria-current="page"]):hover { color: var(--ink); }
+.mu-link { justify-self: start; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink); font: 600 13px/1.2 var(--body); text-decoration: none; }
 .crumbs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
 .crumbs a { text-decoration: none; font-weight: 600; }
 
@@ -85,11 +102,28 @@ input.inp { width: 92px; border-radius: 8px; text-align: center; }
 .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 .badge.pos { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
-/* game cards */
-.day { font: 800 22px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; margin: 6px 0 -4px; }
-.cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
-.card { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 14px; text-decoration: none; color: inherit; }
-.card:hover { border-color: var(--accent); }
+/* game cards: the board's game header (meta line, teams in display type, the call on the right, win % bar) */
+.day { font: 800 24px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; margin: 6px 0 -6px; }
+.cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
+.game { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; text-decoration: none; color: inherit; }
+a.game:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.ghead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 18px; padding: 14px 18px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.meta { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.matchup { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-top: 4px; }
+.team { font: 800 clamp(24px, 4vw, 32px)/1 var(--display); text-transform: uppercase; letter-spacing: .01em; }
+.team.away { color: var(--away); } .team.home { color: var(--home); }
+.matchup .at { font: 600 16px var(--display); color: var(--muted); }
+.verdict { text-align: right; display: grid; gap: 4px; justify-items: end; align-content: start; }
+.verdict .proj { font: 800 22px/1 var(--display); text-transform: uppercase; }
+.siglabel { font-size: 12px; color: var(--muted); }
+.split { grid-column: 1 / -1; display: grid; gap: 4px; }
+.wbar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--line); }
+.wbar span:first-child { background: var(--away); } .wbar span:last-child { background: var(--home); }
+.barlab { display: flex; justify-content: space-between; font: 600 13px var(--mono); }
+.barlab .a { color: var(--away); } .barlab .h { color: var(--home); }
+.gbody { display: grid; gap: 10px; padding: 14px 18px 16px; }
+.cards .team { font-size: 25px; } .cards .verdict .proj { font-size: 18px; } .cards .ghead { padding: 12px 16px 10px; } .cards .gbody { padding: 12px 16px 14px; }
+.sec-title { font: 700 12px/1.2 var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
 .match { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .match .teams { font: 800 24px/1 var(--display); letter-spacing: .03em; text-transform: uppercase; }
 .match .teams .at { color: var(--muted); font-weight: 600; margin: 0 4px; }
@@ -174,14 +208,20 @@ td.hit-y { color: var(--good); font-weight: 700; } td.hit-n { color: var(--bad);
 </head>
 <body>
 <div class="wrap">
+  <nav class="tabs league" aria-label="League">
+    <a href="./#nbl" data-league="nbl">NBL</a>
+    <a href="./#nba" data-league="nba" aria-current="page">NBA</a>
+    <a href="./#nfl" data-league="nfl">NFL</a>
+  </nav>
+  <a class="mu-link" href="./#nba">&larr; NBA line board</a>
   <header class="top">
-    <div>
+    <div class="brand">
       <div class="eyebrow" id="season">NBA</div>
-      <h1>NBA <span>Matchups</span></h1>
+      <h1>NBA <span>Matchup</span> Board</h1>
+      <p>What every defence gives up and every team scores by position, tonight's minutes and projections, and each player's game log and hit rates at any line. Built from the same player ratings, injuries and minutes as the line board.</p>
     </div>
-    <a class="back" href="./#nba">&larr; Line Board</a>
   </header>
-  <nav class="tabs" aria-label="Sections">
+  <nav class="tabs sections" aria-label="Sections">
     <a href="#/" data-tab="games">Games</a>
     <a href="#/lb" data-tab="lb">Leaderboards</a>
     <a href="#/spots" data-tab="spots">Best spots</a>
@@ -429,7 +469,7 @@ const val = (f, r, stat) => STAT[stat].parts.reduce((s, p) => s + r[f.C[p]], 0);
 // router
 // ------------------------------------------------------------------------------------------------
 const view = $('#view');
-function setTab(t) { $$('.tabs a').forEach(a => a.dataset.tab === t ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')); }
+function setTab(t) { $$('.tabs.sections a').forEach(a => a.dataset.tab === t ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')); }
 function route() {
   hideTip();
   window.scrollTo(0, 0);
@@ -479,6 +519,24 @@ function chip(m, gid) {
 const surname = n => { const w = String(n).split(' ').filter(x => !/^(jr\.?|sr\.?|ii|iii|iv|v)$/i.test(x)); return w[w.length - 1] || n; };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const dayMonth = d => `${+d.slice(8, 10)} ${MONTHS[+d.slice(5, 7) - 1]}`;
+const SHORT = { POR: 'Trail Blazers' };
+const shortName = code => SHORT[code] || String((IDX.teams || {})[code] || code).split(' ').slice(-1)[0];
+function gameHead(g, full) {
+  const pa = 1 - (g.p_home ?? 0.5), ph = g.p_home ?? 0.5;
+  const fav = g.margin == null ? '' : `${shortName(g.margin >= 0 ? g.home : g.away)} by ${fmt(Math.abs(g.margin))}`;
+  const meta = [esc(g.tip), `Total ${fmt(g.total)}`,
+    g.mkt_line != null ? `Market ${esc(g.home)} ${g.mkt_line > 0 ? '+' : ''}${fmt(g.mkt_line)}` : '',
+    full && g.mkt_total != null ? `Market total ${fmt(g.mkt_total)}` : '',
+    full ? `Rest ${esc(g.away)} ${g.rest.a ?? '–'}d · ${esc(g.home)} ${g.rest.h ?? '–'}d` : '',
+    g.rest.b2b_a ? `<b style="color:var(--warn)">${esc(g.away)} back-to-back</b>` : '', g.rest.b2b_h ? `<b style="color:var(--warn)">${esc(g.home)} back-to-back</b>` : ''];
+  return `<div class="ghead">
+    <div><div class="meta">${meta.filter(Boolean).map(m => `<span>${m}</span>`).join('')}</div>
+      <div class="matchup"><span class="team away">${esc(shortName(g.away))}</span><span class="at">at</span><span class="team home">${esc(shortName(g.home))}</span></div></div>
+    <div class="verdict"><span class="proj">${fav}</span><span class="siglabel">model margin</span></div>
+    <div class="split"><div class="wbar" role="img" aria-label="Win chance ${esc(g.away)} ${pct(pa, 1)}, ${esc(g.home)} ${pct(ph, 1)}"><span style="width:${100 * pa}%"></span><span style="width:${100 * ph}%"></span></div>
+      <div class="barlab"><span class="a">${esc(g.away)} ${pct(pa, 1)}</span><span class="h">${esc(g.home)} ${pct(ph, 1)}</span></div></div>
+  </div>`;
+}
 function marginText(g) {
   if (g.margin == null) return '–';
   const fav = g.margin >= 0 ? g.home : g.away;
@@ -498,16 +556,14 @@ function showGames() {
       const outs = t => (g.out[t] || []).filter(o => o.p === 0 && (o.min || 0) >= 10).map(o => surname(o.name));
       const oa = outs(g.away), oh = outs(g.home);
       const best = [...bestMatchups(g.away, g.home, g.id, 2), ...bestMatchups(g.home, g.away, g.id, 2)];
-      html += `<a class="card" href="#/g/${g.id}">
-        <div class="match"><span class="teams">${esc(g.away)}<span class="at">@</span>${esc(g.home)}</span><span class="small">${esc(g.tip.split(', ')[1] || '')}</span></div>
-        <div class="kv"><span>Model <b>${marginText(g)}</b></span><span>Total <b>${fmt(g.total)}</b></span>
-          ${g.mkt_line != null ? `<span>Market <b>${esc(g.home)} ${g.mkt_line > 0 ? '+' : ''}${fmt(g.mkt_line)}</b></span>` : ''}
-          ${g.rest.b2b_a ? `<span class="badge warn">${esc(g.away)} B2B</span>` : ''}${g.rest.b2b_h ? `<span class="badge warn">${esc(g.home)} B2B</span>` : ''}</div>
-        <div><div class="kv" style="justify-content:space-between"><span class="small">Blowout 20+ either way</span><b class="mono">${pct(b.b20)}</b></div>
-          <div class="meter" role="img" aria-label="Blowout chance ${pct(b.b20)}"><i style="width:${Math.min(100, 100 * (b.b20 || 0) / 0.5)}%"></i></div>
-          <div class="small" style="margin-top:3px">15+: ${pct(b.b15)} · within 5: ${pct(b.close5)}</div></div>
-        ${oa.length || oh.length ? `<div class="small">Out: ${oa.length ? esc(g.away) + ' ' + esc(oa.slice(0, 3).join(', ')) + (oa.length > 3 ? ` +${oa.length - 3}` : '') : ''}${oa.length && oh.length ? ' · ' : ''}${oh.length ? esc(g.home) + ' ' + esc(oh.slice(0, 3).join(', ')) + (oh.length > 3 ? ` +${oh.length - 3}` : '') : ''}</div>` : ''}
-        <div class="chips">${best.filter(m => m.e > 0.01).map(m => chip(m, g.id)).join('') || '<span class="small">No standout matchups</span>'}</div>
+      html += `<a class="game" href="#/g/${g.id}">${gameHead(g)}
+        <div class="gbody">
+          <div><div class="kv" style="justify-content:space-between"><span class="sec-title">Blowout 20+ either way</span><b class="mono">${pct(b.b20)}</b></div>
+            <div class="meter" role="img" aria-label="Blowout chance ${pct(b.b20)}"><i style="width:${Math.min(100, 100 * (b.b20 || 0) / 0.5)}%"></i></div>
+            <div class="small" style="margin-top:3px">15+: ${pct(b.b15)} · within 5: ${pct(b.close5)}</div></div>
+          ${oa.length || oh.length ? `<div class="small">Out: ${oa.length ? esc(g.away) + ' ' + esc(oa.slice(0, 3).join(', ')) + (oa.length > 3 ? ` +${oa.length - 3}` : '') : ''}${oa.length && oh.length ? ' · ' : ''}${oh.length ? esc(g.home) + ' ' + esc(oh.slice(0, 3).join(', ')) + (oh.length > 3 ? ` +${oh.length - 3}` : '') : ''}</div>` : ''}
+          <div class="chips">${best.filter(m => m.e > 0.01).map(m => chip(m, g.id)).join('') || '<span class="small">No standout matchups</span>'}</div>
+        </div>
       </a>`;
     }
     html += '</div>';
@@ -589,13 +645,7 @@ function showGame(gid) {
   };
   view.innerHTML = `
     <div class="crumbs"><a href="#/">Games</a> › <span>${esc(g.away)} @ ${esc(g.home)}</span></div>
-    <section class="panel">
-      <div class="match"><span class="teams" style="font-size:30px">${esc(IDX.teams[g.away] || g.away)} <span class="at">@</span> ${esc(IDX.teams[g.home] || g.home)}</span></div>
-      <div class="kv" style="margin-top:8px"><span>${esc(g.tip)}</span><span>Model <b>${marginText(g)}</b></span><span>Win ${esc(g.home)} <b>${pct(g.p_home)}</b></span><span>Total <b>${fmt(g.total)}</b></span>
-        ${g.mkt_line != null ? `<span>Market line <b>${esc(g.home)} ${g.mkt_line > 0 ? '+' : ''}${fmt(g.mkt_line)}</b></span>` : ''}${g.mkt_total != null ? `<span>Market total <b>${fmt(g.mkt_total)}</b></span>` : ''}
-        <span>Rest <b>${esc(g.away)} ${g.rest.a ?? '–'}d · ${esc(g.home)} ${g.rest.h ?? '–'}d</b></span>
-        ${g.rest.b2b_a ? `<span class="badge warn">${esc(g.away)} back-to-back</span>` : ''}${g.rest.b2b_h ? `<span class="badge warn">${esc(g.home)} back-to-back</span>` : ''}</div>
-    </section>
+    <section class="game">${gameHead(g, true)}</section>
     <section class="panel"><h2>Blowout chance</h2>
       <div class="tiles">
         <div class="tile"><div class="l">20+ either way</div><div class="v">${pct(b.b20)}</div><div class="d">${esc(g.away)} ${pct(b.a20)} · ${esc(g.home)} ${pct(b.h20)}</div></div>
