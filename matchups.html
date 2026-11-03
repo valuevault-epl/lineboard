@@ -18,16 +18,16 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=Public+Sans:wght@400;500;600;700&display=swap">
 <style>
 /* NBA Matchups. Same royal-blue NBA palette and type as the Line Board's NBA tab.
-   Heat cells: orange = concedes/scores MORE than average (good for overs), blue = less (good for unders),
-   neutral at the middle. Blue/orange chosen over green/red: green/red fails colour-blind separation
-   (deutan dE 2.9); blue/orange passes in both modes (dE 25-26). Cells always carry the number and rank too. */
+   Heat cells: green = concedes/scores MORE than average (good for overs), red = less (good for unders),
+   neutral at the middle. Green/red at the user's request (3 Nov 2026; blue/orange was the colour-blind-safe
+   first version). Every cell also carries its number, rank and % so colour is never the only cue. */
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 [hidden] { display: none !important; }
 :root {
   --bg: #eceff6; --surface: #ffffff; --surface-2: #f4f6fb; --ink: #121a2c; --muted: #56627a; --line: #d3d9e6;
   --accent: #1d4ea3; --accent-ink: #ffffff; --accent-soft: #dde6f6;
-  --more: #c8621a; --less: #2a5fbf; --hit: #1d4ea3; --miss: #b9c1cf;
+  --more: #1e9a52; --less: #d13b3b; --hit: #1d4ea3; --miss: #b9c1cf;
   --good: #187a4b; --good-soft: #dcf1e5; --warn: #9a6200; --warn-soft: #fbeed3; --bad: #b0281f; --bad-soft: #f8dfdc;
   --display: 'Big Shoulders Display', 'Arial Narrow', 'Roboto Condensed', sans-serif;
   --body: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -38,7 +38,7 @@ html { -webkit-text-size-adjust: 100%; }
 @media (prefers-color-scheme: dark) { :root {
   --bg: #0b1020; --surface: #131a2c; --surface-2: #192236; --ink: #e3e8f3; --muted: #93a0b9; --line: #273250;
   --accent: #7aa7f5; --accent-ink: #07132b; --accent-soft: #1a2a4d;
-  --more: #d27a36; --less: #5b8be6; --hit: #7aa7f5; --miss: #3a4562;
+  --more: #3cc47a; --less: #f0605f; --hit: #7aa7f5; --miss: #3a4562;
   --good: #52c690; --good-soft: #143022; --warn: #e3aa40; --warn-soft: #33270f; --bad: #f1786f; --bad-soft: #3b1b19;
   color-scheme: dark; } }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 400 14px/1.45 var(--body); }
@@ -222,7 +222,7 @@ const sgn = (v, d = 1) => v == null || !isFinite(v) ? '–' : (v > 0 ? '+' : v <
 const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
 
 const PREF_KEY = 'lineboard:mu:prefs';
-const prefs = Object.assign({ win: 'season', measure: 'raw', more: false, stat: 'pts', sample: 'l20', alt: false,
+const prefs = Object.assign({ win: 'season', measure: 'raw', more: false, stat: 'pts', sample: 'l20', alt: false, scn: 'proj',
   venue: 'all', script: 'all', lbSide: 'def', lbStat: 'pts', lbPos: 'PG', lbWin: 'season', lbMeasure: 'raw', lbDir: 'desc',
   lbTeamSort: 'pace', spotStat: 'pts', spotKey: 'boost', spotDir: 'top' }, (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch (e) { return {}; } })());
 const save = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) {} };
@@ -341,7 +341,30 @@ function playersOf(team, gid) {
   return Object.entries(IDX.players).filter(([, p]) => p.team === team && p.games[gid]).map(([id, p]) => ({ id, ...p, g: p.games[gid] }))
     .sort((a, b) => (b.g.min || 0) - (a.g.min || 0) || (b.avg_min || 0) - (a.avg_min || 0));
 }
-const projOf = (pl, gid, stat) => ((pl.games[gid] || {}).proj || {})[stat];
+// Game script: 'proj' = expected (the spread allowed for), 'blowout' = it ends 20+ either way, 'close' = decided by
+// under 10. Minutes per scenario come from the data (by role); projections scale with those minutes and with the
+// per-minute change measured for that role (garbage time adds points, assists and threes; rebounds don't move).
+const SCN = [['proj', 'Projected'], ['blowout', '20+ blowout'], ['close', 'Close game']];
+const minOf = g => !g ? null : prefs.scn === 'blowout' ? g.min_blowout : prefs.scn === 'close' ? g.min_close : g.min;
+const roleGroup = g => g.role <= 1 ? 0 : g.role <= 3 ? 1 : 2;           // under 16 / 16-28 / 28+ minutes
+function projOf(pl, gid, stat) {
+  const g = pl.games[gid] || {}, pr = g.proj || {};
+  if (prefs.scn === 'proj' || !g.min || minOf(g) == null || g.role == null) return pr[stat];
+  const mult = ((((IDX.scenario || {}).per_minute || {})[prefs.scn]) || [])[roleGroup(g)] || {};
+  return STAT[stat].parts.reduce((t, b) => t + (pr[b] || 0) * minOf(g) / g.min * (mult[b] || 1), 0);
+}
+// chance he gets on court at all (coach's decision): his own recent record, shifted for the game script
+const getsIn = (g, scn = prefs.scn) => !g ? null : g.gets_in ? g.gets_in[scn]
+  : g.role != null ? ((((IDX.scenario || {}).gets_in || {})[scn]) || [])[g.role] : null;
+function scnBar(g, where) {
+  const b = g ? g.blowout : null;
+  const note = prefs.scn === 'blowout'
+    ? `If it ends 20+ either way${b ? ` (${pct(b.b20)} chance tonight)` : ''}: heavy-minute players play ~3–4 fewer minutes, the bench more, and deep-bench players get on court in ~90% of blowouts vs ~60% normally. Garbage time also adds points, assists and threes per minute.`
+    : prefs.scn === 'close'
+    ? `If it's decided by under 10${b ? ` (${pct(1 - b.b10)} chance tonight)` : ''}: starters play ~1–2 more minutes, the bench less, and deep-bench players often don't get in.`
+    : `Expected minutes and stats, with tonight's spread already allowed for.${where === 'player' ? ' Switch to see how a blowout or a close game changes them.' : ''}`;
+  return `<div class="bar scnbar"><span class="lab">Minutes &amp; projections</span>${seg('scn', SCN, prefs.scn)}<span class="small" style="flex:1 1 260px">${note}</span></div>`;
+}
 function statusBadge(g) {
   if (!g || g.p == null || g.p >= 1) return '';
   const cls = g.p === 0 ? 'bad' : 'warn';
@@ -350,10 +373,12 @@ function statusBadge(g) {
 }
 function minutesText(pl, g) {
   const avg = pl.gp >= 3 ? pl.avg_min : (pl.l10_min ?? pl.last_min);
-  if (!g || g.min == null) return `<span class="small">avg ${fmt(avg)}</span>`;
-  const d = avg != null ? g.min - avg : null;
+  const m = minOf(g);
+  if (!g || m == null) return `<span class="small">avg ${fmt(avg)}</span>`;
+  const d = avg != null ? m - avg : null;
   const cls = d == null ? '' : d >= 1.5 ? 'up' : d <= -1.5 ? 'down' : '';
-  return `<b class="mono">${fmt(g.min)}</b> <span class="small">avg ${fmt(avg)}${d != null ? ` · <span class="${cls}">${sgn(d)}</span>` : ''}</span>`;
+  const gi = getsIn(g);
+  return `<b class="mono">${fmt(m)}</b> <span class="small">avg ${fmt(avg)}${d != null ? ` · <span class="${cls}">${sgn(d)}</span>` : ''}${gi != null && gi < 0.95 ? `<span class="sub">gets on ${pct(gi)}</span>` : ''}</span>`;
 }
 const val = (f, r, stat) => STAT[stat].parts.reduce((s, p) => s + r[f.C[p]], 0);
 
@@ -421,8 +446,8 @@ function showGames() {
   IDX.games.forEach(g => (byDay[g.tip.split(',')[0]] = byDay[g.tip.split(',')[0]] || []).push(g));
   let html = `<div class="panel"><h2>How to use it</h2><p class="note" style="margin:0">Tap a game, then a cell in its matchup grid
     (position &times; stat) to see the players it favours, then a player for his last 5–40 games, hit rates at any line and the
-    model's chance. <b>Orange</b> = the defence gives that position more than those players usually get (good for overs),
-    <b>blue</b> = less. Times are Melbourne.</p></div>`;
+    model's chance. <b>Green</b> = the defence gives that position more than those players usually get (good for overs),
+    <b>red</b> = less (good for unders). Times are Melbourne.</p></div>`;
   for (const [day, gs] of Object.entries(byDay)) {
     html += `<h2 class="day">${esc(day)}</h2><div class="cards">`;
     for (const g of gs) {
@@ -491,13 +516,13 @@ function showGame(gid) {
   };
   const plTable = (team) => {
     const rows = playersOf(team, gid);
-    return `<section class="panel"><h2>${esc(IDX.teams[team] || team)} · tonight's minutes &amp; projections</h2><div class="tw"><table>
+    return `<section class="panel"><h2>${esc(IDX.teams[team] || team)} · ${prefs.scn === 'blowout' ? 'if it\'s a 20+ blowout' : prefs.scn === 'close' ? 'if it\'s a close game' : 'tonight\'s minutes &amp; projections'}</h2><div class="tw"><table>
       <thead><tr><th>Player</th><th class="n">Min</th><th class="n">PTS</th><th class="n">REB</th><th class="n">AST</th><th class="n">3PM</th></tr></thead><tbody>
       ${rows.map(p => `<tr class="click" data-p="${p.id}"><td><span class="pname">${esc(p.name)}</span> <span class="badge pos">${p.pos}</span> ${statusBadge(p.g)}
-          <span class="sub">${p.start != null && p.start >= 0.6 ? 'starter' : 'bench'}${p.g.min_blowout != null ? ` · if blowout ~${fmt(p.g.min_blowout, 0)} min` : ''}</span></td>
+          <span class="sub">${p.start != null && p.start >= 0.6 ? 'starter' : 'bench'}${prefs.scn !== 'proj' && p.g.min != null ? ` · ${fmt(p.g.min)} min normally` : ''}</span></td>
         <td class="n">${minutesText(p, p.g)}</td>
         ${['pts', 'reb', 'ast', 'tpm'].map(s => `<td class="n">${fmt(projOf(p, gid, s))}<span class="sub">${fmt((p.avg || {})[s])}</span></td>`).join('')}</tr>`).join('')}
-      </tbody></table></div><p class="note">Big number = projection tonight, small = season average. Minutes = projected if he plays (injuries and the spread allowed for) vs his season average.</p></section>`;
+      </tbody></table></div><p class="note">Big number = projection${prefs.scn === 'proj' ? ' tonight' : ' in that game script'}, small = season average. Minutes = if he plays (injuries${prefs.scn === 'proj' ? ' and the spread' : ''} allowed for) vs his season average; “gets on” = chance a bench player sees the floor at all.</p></section>`;
   };
   view.innerHTML = `
     <div class="crumbs"><a href="#/">Games</a> › <span>${esc(g.away)} @ ${esc(g.home)}</span></div>
@@ -516,7 +541,9 @@ function showGame(gid) {
         <div class="tile"><div class="l">Within 5</div><div class="v">${pct(b.close5)}</div><div class="d">starters play more</div></div>
       </div>
       <p class="note">From the model's margin and its spread (sd ${fmt(IDX.sigma)} pts). Checked on 8,900 games 2019-26: 15+ predicted 32.7%, happened 32.1%; 20+ 18.7% vs 19.2%. An average game is 20+ about 19% of the time.
-      In 20+ point games, players who usually play 28+ minutes average <b>~4 fewer minutes</b> than expected, mid-rotation ~1 fewer, the bench ~0.5 more; their projections tonight already allow for the spread (1.5 fewer minutes for starters at a 15-point spread).</p>
+      In 20+ point games (2023-26, if they play): 36+ minute players play <b>~4.4 fewer minutes</b> than usual, 28–36 minute players ~3–4 fewer,
+      bench players ~1 more, and deep-bench players get on court in ~90% of blowouts vs ~60% normally; garbage time also adds points, assists and threes per minute.
+      In games decided by under 10 it flips: starters ~1.5–2 more, the bench less. Use the <b>Minutes &amp; projections</b> switch below to see each player's numbers in either script.</p>
     </section>
     <section class="panel"><h2>Injuries</h2><div class="kv"><b style="min-width:40px">${esc(g.away)}</b> ${injuries(g.away)}</div><div class="kv" style="margin-top:6px"><b style="min-width:40px">${esc(g.home)}</b> ${injuries(g.home)}</div>
       ${IDX.injuries ? `<p class="note">${esc(IDX.injuries)}</p>` : ''}</section>
@@ -528,6 +555,7 @@ function showGame(gid) {
     <div class="legend"><span><i class="sw" style="background:var(--more)"></i>more than average (overs)</span><span><i class="sw" style="background:var(--less)"></i>less (unders)</span>
       <span>Colour and the % = the matchup effect the projections use: this season's “vs usual”, shrunk for sample size, with last season at half weight.</span></div>
     <div class="grid2">${sideHtml(g.away, g.home)}${sideHtml(g.home, g.away)}</div>
+    ${scnBar(g, 'game')}
     <div class="grid2">${plTable(g.away)}${plTable(g.home)}</div>`;
   onSeg(view, (k, v) => { if (k === 'more') prefs.more = v === '1'; else prefs[k] = v; save(); const y = window.scrollY; showGame(gid); window.scrollTo(0, y); });
   $$('.mgrid', view).forEach((t, i) => {
@@ -571,10 +599,14 @@ async function showMatchup(gid, team, pos, stat) {
     </section>
     <section class="panel"><h2>${esc(team)} ${all ? 'players' : pos + 's'} tonight · ${STAT[stat].label}</h2>
       <div class="bar" style="margin-bottom:8px">${seg('all', [['0', 'This position'], ['1', 'All positions']], all ? '1' : '0')}</div>
+      ${scnBar(g, 'matchup')}
       <div id="mu-pl"><p class="loading">Loading game logs…</p></div>
       <p class="note">Proj = tonight's projection (his recent rates &times; projected minutes &times; this matchup). Matchup = how much of it comes from the defence. Hit = how often he reached the line nearest his projection.</p>
     </section>`;
-  onSeg(view, (k, v) => { location.hash = `#/g/${gid}/m/${team}/${pos}/${stat}` + (v === '1' ? '/all' : ''); });
+  onSeg(view, (k, v) => {
+    if (k === 'scn') { prefs.scn = v; save(); const y = window.scrollY; showMatchup(gid, team, pos, stat).then(() => window.scrollTo(0, y)); return; }
+    location.hash = `#/g/${gid}/m/${team}/${pos}/${stat}` + (v === '1' ? '/all' : '');
+  });
   let f = null;
   try { f = await teamFile(team); } catch (err) { /* the table still shows the projections */ }
   const step = STAT[stat].step;
@@ -636,8 +668,8 @@ async function showPlayer(pid, gid) {
     }
     // filters (venue, game script, without a teammate) apply to every sample
     const keep = r => (prefs.venue === 'all' || (prefs.venue === 'home') === !!r[C.home]) &&
-      (prefs.script === 'all' || (r[C.margin] != null && (prefs.script === 'close' ? Math.abs(r[C.margin]) <= 10
-        : prefs.script === 'nob' ? Math.abs(r[C.margin]) < 20 : Math.abs(r[C.margin]) >= 15))) &&
+      (prefs.script === 'all' || (r[C.margin] != null && !!({ close: Math.abs(r[C.margin]) < 10, nob: Math.abs(r[C.margin]) < 20,
+        blow: Math.abs(r[C.margin]) >= 15, b20: Math.abs(r[C.margin]) >= 20 })[prefs.script])) &&
       (!PV.without || (missed[PV.without] && missed[PV.without].has(r[C.gid])));
     const L = logs.filter(keep);
     const vsAll = [...vsOld.filter(keep), ...L.filter(r => r[C.opp] === opp)].sort((a, b) => a[C.date] < b[C.date] ? -1 : 1);
@@ -689,24 +721,25 @@ async function showPlayer(pid, gid) {
           <span class="small">${esc(IDX.teams[pl.team] || pl.team)} ${pl.team === g.home ? 'vs' : '@'} ${esc(opp)} · ${esc(g.tip)}</span> ${statusBadge(ge)}</div>
         ${ge.status ? `<p class="note">Injury list: ${esc(ge.status)}</p>` : ''}
         <div class="tiles" style="margin-top:10px">
-          <div class="tile"><div class="l">Minutes tonight</div><div class="v">${fmt(ge.min)}</div><div class="d">if he plays · spread allowed for</div></div>
-          <div class="tile"><div class="l">Season average</div><div class="v">${fmt(pl.avg_min)}</div><div class="d">${pl.gp} games${ge.min != null && pl.avg_min != null ? ` · tonight ${sgn(ge.min - pl.avg_min)}` : ''}</div></div>
+          <div class="tile"><div class="l">Minutes · ${prefs.scn === 'blowout' ? '20+ blowout' : prefs.scn === 'close' ? 'close game' : 'projected'}</div><div class="v">${fmt(minOf(ge))}</div><div class="d">if he plays${prefs.scn === 'proj' ? ' · spread allowed for' : ''}${getsIn(ge) != null && getsIn(ge) < 0.95 ? ` · gets on court ${pct(getsIn(ge))}` : ''}</div></div>
+          <div class="tile"><div class="l">Season average</div><div class="v">${fmt(pl.avg_min)}</div><div class="d">${pl.gp} games${minOf(ge) != null && pl.avg_min != null ? ` · ${prefs.scn === 'proj' ? 'tonight' : 'this script'} ${sgn(minOf(ge) - pl.avg_min)}` : ''}</div></div>
           <div class="tile"><div class="l">Last 10 / last season</div><div class="v">${fmt(pl.l10_min)}</div><div class="d">last season ${fmt(pl.last_min)}</div></div>
-          <div class="tile"><div class="l">If it's a 20+ blowout</div><div class="v">~${fmt(ge.min_blowout, 0)}</div><div class="d">chance ${pct(g.blowout.b20)} · his own: ${fmt(avgOf(myBlow, r => r[C.min]))} in ${myBlow.length} blowouts, ${fmt(avgOf(myClose, r => r[C.min]))} in close games</div></div>
+          <div class="tile"><div class="l">By game script</div><div class="v" style="font-size:17px;line-height:1.5">Blowout ${fmt(ge.min_blowout)} · close ${fmt(ge.min_close)}</div><div class="d">20+ blowout ${pct(g.blowout.b20)} tonight, under 10 ${pct(1 - g.blowout.b10)}. His own last ${logs.length}: ${fmt(avgOf(myBlow, r => r[C.min]))} min in ${myBlow.length} blowouts, ${fmt(avgOf(myClose, r => r[C.min]))} in ${myClose.length} close games</div></div>
         </div>
         <div class="bar" style="margin-top:10px"><span class="lab">${esc(opp)} vs ${pl.pos}s</span><div class="chips">${mchips}</div></div>
       </section>
+      ${scnBar(g, 'player')}
       <div class="bar"><span class="lab">Stat</span>${seg('stat', Object.keys(STAT).map(k => [k, STAT[k].short]), stat)}</div>
-      <div class="tiles">${['pts', 'reb', 'ast', 'tpm', 'pra'].map(s => `<div class="tile"><div class="l">Proj ${STAT[s].short}</div><div class="v">${fmt(projOf(pl, gid, s))}</div><div class="d">season ${fmt(s === 'pra' ? (pl.avg && pl.avg.pts != null ? pl.avg.pts + pl.avg.reb + pl.avg.ast : null) : (pl.avg || {})[s])} · matchup ${(ge.eff || {})[s] != null ? sgn(100 * ge.eff[s], 0) + '%' : '–'}</div></div>`).join('')}</div>
+      <div class="tiles">${['pts', 'reb', 'ast', 'tpm', 'pra'].map(s => `<div class="tile"><div class="l">${prefs.scn === 'blowout' ? 'Blowout' : prefs.scn === 'close' ? 'Close game' : 'Proj'} ${STAT[s].short}</div><div class="v">${fmt(projOf(pl, gid, s))}</div><div class="d">season ${fmt(s === 'pra' ? (pl.avg && pl.avg.pts != null ? pl.avg.pts + pl.avg.reb + pl.avg.ast : null) : (pl.avg || {})[s])} · matchup ${(ge.eff || {})[s] != null ? sgn(100 * ge.eff[s], 0) + '%' : '–'}</div></div>`).join('')}</div>
       <section class="panel"><h2>${st.label} · last games</h2>
         <div class="bar" style="margin-bottom:8px"><span class="lab">Games</span>${seg('sample', SAMPLES.map(([k, l]) => [k, k === 'opp' ? 'vs ' + opp : l]), prefs.sample)}</div>
         <div class="bar" style="margin-bottom:10px">
           ${seg('venue', [['all', 'Home + away'], ['home', 'Home'], ['away', 'Away']], prefs.venue)}
-          <select class="sel" id="script" aria-label="Game script"><option value="all">All games</option><option value="close">Within 10</option><option value="nob">Not 20+ blowouts</option><option value="blow">15+ blowouts only</option></select>
+          <select class="sel" id="script" aria-label="Game script"><option value="all">All games</option><option value="close">Close (under 10)</option><option value="nob">Not 20+ blowouts</option><option value="blow">15+ blowouts only</option><option value="b20">20+ blowouts only</option></select>
           <select class="sel" id="without" aria-label="Without a teammate"><option value="">With or without anyone</option>${mates.map(t => `<option value="${t}">Without ${esc(IDX.players[t].name)} (${missed[t].size} g)${outTonight.has(t) ? ' · out tonight' : ''}</option>`).join('')}</select>
         </div>
         <div class="chart" id="chart"></div>
-        <p class="note">${sel.length} games · reached <b>${PV.k}+</b> in ${selHit ? selHit.h : 0} (${selHit ? pct(selHit.p) : '–'}) · average ${fmt(avgOf(sel, r => val(f, r, stat)))} · model ${pct(mSel)} tonight (projection ${fmt(mu)}).
+        <p class="note">${sel.length} games · reached <b>${PV.k}+</b> in ${selHit ? selHit.h : 0} (${selHit ? pct(selHit.p) : '–'}) · average ${fmt(avgOf(sel, r => val(f, r, stat)))} · model ${pct(mSel)} ${prefs.scn === 'blowout' ? 'if it\'s a 20+ blowout' : prefs.scn === 'close' ? 'if it\'s a close game' : 'tonight'} (projection ${fmt(mu)}).${prefs.scn === 'blowout' && prefs.script !== 'b20' ? ' Set the games filter to “20+ blowouts only” to see his real ones.' : ''}
           <span class="legend" style="display:inline-flex;margin-left:6px"><span><i class="sw" style="background:var(--hit)"></i>reached</span><span><i class="sw" style="background:var(--miss)"></i>missed</span></span></p>
       </section>
       <section class="panel"><h2>Lines · hit rate</h2>
@@ -906,12 +939,12 @@ function showSpots() {
   for (const [id, p] of Object.entries(IDX.players)) {
     for (const [gid, g] of Object.entries(p.games)) {
       if (!g.proj || !(g.p > 0) || (g.min || 0) < 15) continue;
-      const mu = g.proj[stat];
+      const mu = projOf(p, gid, stat);
       const e = (g.eff || {})[stat];
       const boost = e != null ? mu - mu / (1 + e) : 0;
       const avg = stat === 'pra' ? (p.avg && p.avg.pts != null ? p.avg.pts + p.avg.reb + p.avg.ast : null) : (p.avg || {})[stat];
       const baseMin = p.gp >= 3 ? p.avg_min : (p.l10_min ?? p.last_min);
-      rows.push({ id, p, gid, g, mu, boost, e, avg, vsAvg: avg != null && p.gp >= 3 ? mu - avg : null, dMin: baseMin != null ? g.min - baseMin : null });
+      rows.push({ id, p, gid, g, mu, boost, e, avg, vsAvg: avg != null && p.gp >= 3 ? mu - avg : null, dMin: baseMin != null ? minOf(g) - baseMin : null });
     }
   }
   const key = { boost: r => r.boost, min: r => r.dMin, avg: r => r.vsAvg }[prefs.spotKey] || (r => r.boost);
@@ -920,6 +953,7 @@ function showSpots() {
     <div class="bar" style="margin-bottom:8px"><span class="lab">Stat</span>${seg('spotStat', ['pts', 'reb', 'ast', 'tpm', 'pra'].map(s => [s, STAT[s].short]), stat)}</div>
     <div class="bar" style="margin-bottom:12px"><span class="lab">Rank by</span>${seg('spotKey', [['boost', 'Matchup boost'], ['min', 'Minutes up'], ['avg', 'Proj vs season avg']], prefs.spotKey)}
       ${seg('spotDir', [['top', 'Overs (biggest)'], ['bottom', 'Unders (lowest)']], prefs.spotDir)}</div>
+    ${scnBar(null, 'spots')}
     <div class="tw"><table><thead><tr><th>Player</th><th>Game</th><th class="n">Min</th><th class="n">Proj ${STAT[stat].short}</th><th class="n">Season</th><th class="n">Matchup</th></tr></thead><tbody>
     ${list.map(r => { const gm = gameById(r.gid); return `<tr class="click" data-p="${r.id}" data-g="${r.gid}"><td><span class="pname">${esc(r.p.name)}</span> <span class="badge pos">${r.p.pos}</span> ${statusBadge(r.g)}<span class="sub">${esc(r.p.team)}</span></td>
       <td class="small">${r.p.team === gm.home ? 'vs' : '@'} ${esc(r.g.opp)}<span class="sub">${esc(gm.tip)}</span></td><td class="n">${minutesText(r.p, r.g)}</td>
