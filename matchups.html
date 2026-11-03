@@ -122,6 +122,10 @@ a.game:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 .barlab { display: flex; justify-content: space-between; font: 600 13px var(--mono); }
 .barlab .a { color: var(--away); } .barlab .h { color: var(--home); }
 .gbody { display: grid; gap: 10px; padding: 14px 18px 16px; }
+.tinted .ghead { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.tinted .tile, .tinted .mchip { background: color-mix(in srgb, var(--surface) 55%, transparent); }
+.softness { font-size: 12.5px; }
+.softness b { font-family: var(--mono); }
 .cards .team { font-size: 25px; } .cards .verdict .proj { font-size: 18px; } .cards .ghead { padding: 12px 16px 10px; } .cards .gbody { padding: 12px 16px 14px; }
 .sec-title { font: 700 12px/1.2 var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
 .match { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
@@ -374,6 +378,31 @@ const heat = e => e == null || !isFinite(e) ? '' : wash(e / 0.10);
 // a rank out of `of` teams: 1st = deepest green, last = deepest red, the middle = no colour
 // a chance (0-1): green above 50%, red below, no colour near 50% (full strength at 90% / 10%)
 const heatP = p => p == null || !isFinite(p) ? '' : wash((p - 0.5) / 0.4);
+// a lighter wash for whole cards and panels (text sits on it): full strength 30% instead of 72%
+function tint(rank, of) {
+  if (!rank || !(of > 1)) return '';
+  const mid = (of + 1) / 2, t = (mid - rank) / (mid - 1);
+  const pc = Math.round(Math.pow(Math.min(1, Math.abs(t)), 1.3) * 30);
+  return pc < 3 ? '' : `background:color-mix(in srgb, var(${t > 0 ? '--more-bg' : '--less-bg'}) ${pc}%, var(--surface))`;
+}
+// how much a defence gives up tonight: its lineup-adjusted matchup effect averaged over the five positions for points,
+// rebounds and assists; a game's score is both defences averaged (high = overs-friendly)
+function defScore(gid, team) {
+  let t = 0, n = 0;
+  for (const pos of IDX.positions) for (const st of ['pts', 'reb', 'ast']) {
+    const e = tonightEff(gid, team, pos, st);
+    if (e != null) { t += e; n++; }
+  }
+  return n ? t / n : null;
+}
+const gameScore = g => { const a = defScore(g.id, g.home), b = defScore(g.id, g.away); return a == null || b == null ? null : (a + b) / 2; };
+function rankOf(v, all) {                        // 1 = highest
+  if (v == null) return null;
+  const xs = all.filter(x => x != null);
+  return { rank: 1 + xs.filter(x => x > v).length, of: xs.length };
+}
+const allGameScores = () => IDX.games.map(gameScore);
+const allDefScores = () => IDX.games.flatMap(g => [defScore(g.id, g.home), defScore(g.id, g.away)]);
 function heatRank(rank, of) {
   if (!rank || !(of > 1)) return '';
   const mid = (of + 1) / 2;
@@ -548,7 +577,7 @@ function showGames() {
   let html = `<div class="panel"><h2>How to use it</h2><p class="note" style="margin:0">Tap a game, then a cell in its matchup grid
     (position &times; stat) to see the players it favours, then a player for his last 5–40 games, hit rates at any line and the
     model's chance. <b>Green</b> = the defence gives that position more than those players usually get (good for overs),
-    <b>red</b> = less (good for unders). Times are Melbourne.</p></div>`;
+    <b>red</b> = less (good for unders). Each game card is tinted the same way by how soft both defences are tonight. Times are Melbourne.</p></div>`;
   for (const [day, gs] of Object.entries(byDay)) {
     html += `<h2 class="day">${esc(day)}</h2><div class="cards">`;
     for (const g of gs) {
@@ -556,12 +585,14 @@ function showGames() {
       const outs = t => (g.out[t] || []).filter(o => o.p === 0 && (o.min || 0) >= 10).map(o => surname(o.name));
       const oa = outs(g.away), oh = outs(g.home);
       const best = [...bestMatchups(g.away, g.home, g.id, 2), ...bestMatchups(g.home, g.away, g.id, 2)];
-      html += `<a class="game" href="#/g/${g.id}">${gameHead(g)}
+      const gs = gameScore(g), GR = rankOf(gs, allGameScores());
+      html += `<a class="game ${GR ? 'tinted' : ''}" href="#/g/${g.id}" style="${GR ? tint(GR.rank, GR.of) : ''}">${gameHead(g)}
         <div class="gbody">
           <div><div class="kv" style="justify-content:space-between"><span class="sec-title">Blowout 20+ either way</span><b class="mono">${pct(b.b20)}</b></div>
             <div class="meter" role="img" aria-label="Blowout chance ${pct(b.b20)}"><i style="width:${Math.min(100, 100 * (b.b20 || 0) / 0.5)}%"></i></div>
             <div class="small" style="margin-top:3px">15+: ${pct(b.b15)} · within 5: ${pct(b.close5)}</div></div>
           ${oa.length || oh.length ? `<div class="small">Out: ${oa.length ? esc(g.away) + ' ' + esc(oa.slice(0, 3).join(', ')) + (oa.length > 3 ? ` +${oa.length - 3}` : '') : ''}${oa.length && oh.length ? ' · ' : ''}${oh.length ? esc(g.home) + ' ' + esc(oh.slice(0, 3).join(', ')) + (oh.length > 3 ? ` +${oh.length - 3}` : '') : ''}</div>` : ''}
+          ${GR ? `<div class="softness">Overs-friendly matchups: <b>${ord(GR.rank)} of ${GR.of}</b> games <span class="small">(both defences ${sgn(100 * gs, 1)}% vs usual on pts/reb/ast)</span></div>` : ''}
           <div class="chips">${best.filter(m => m.e > 0.01).map(m => chip(m, g.id)).join('') || '<span class="small">No standout matchups</span>'}</div>
         </div>
       </a>`;
@@ -620,7 +651,9 @@ function showGame(gid) {
   const nTeams = new Set(IDX.games.flatMap(x => [x.home, x.away])).size;
   const sideHtml = (team, opp) => {
     const off = prefs.measure === 'off' || prefs.measure === 'offt';
-    return `<section class="panel"><h2>${esc(team)} players ${off ? `· what ${esc(team)} ${prefs.measure === 'offt' ? 'project to score tonight' : 'score'} by position` : `vs ${esc(opp)} defence${prefs.measure === 'tonight' ? ' tonight' : ''}`}</h2>
+    const ds = defScore(g.id, opp), DR = rankOf(ds, allDefScores());
+    return `<section class="panel ${DR ? 'tinted' : ''}" style="${DR ? tint(DR.rank, DR.of) : ''}"><h2>${esc(team)} players ${off ? `· what ${esc(team)} ${prefs.measure === 'offt' ? 'project to score tonight' : 'score'} by position` : `vs ${esc(opp)} defence${prefs.measure === 'tonight' ? ' tonight' : ''}`}</h2>
+      ${DR ? `<p class="softness" style="margin:-4px 0 10px">${esc(opp)} defence tonight: <b>${ord(DR.rank)} softest of ${DR.of}</b> <span class="small">(${sgn(100 * ds, 1)}% vs usual on pts/reb/ast, lineup allowed for)</span></p>` : ''}
       ${gridTable(g, team, opp)}
       <p class="note">${prefs.measure === 'tonight' ? `What ${esc(opp)} would concede per game to each position with <b>tonight's lineup</b> (injuries, rest and trades allowed for): the league average &times; their matchup effect (the %). Rank among the ${nTeams} teams playing, 1st = gives up the most.`
         : prefs.measure === 'offt' ? `Tonight's projections for ${esc(team)}'s players at each position added up (minutes, injuries and the game-script switch allowed for). Rank among the ${nTeams} teams playing, 1st = the most.`
