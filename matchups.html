@@ -269,7 +269,7 @@ const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 's
 const PREF_KEY = 'lineboard:mu:prefs';
 const prefs = Object.assign({ win: 'season', measure: 'raw', more: false, stat: 'pts', sample: 'l20', alt: false, scn: 'proj',
   venue: 'all', script: 'all', lbSide: 'def', lbStat: 'pts', lbPos: 'PG', lbWin: 'season', lbMeasure: 'raw', lbDir: 'desc',
-  lbTeamSort: 'pace', spotStat: 'pts', spotKey: 'boost', spotDir: 'top' }, (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch (e) { return {}; } })());
+  lbTeamSort: 'pace', spotStat: 'pts', spotKey: 'boost', spotDir: 'top', spotDay: 'all', spotGame: 'all' }, (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch (e) { return {}; } })());
 const save = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) {} };
 if (prefs.v !== 2) { prefs.measure = 'tonight'; prefs.lbSide = 'tonight'; prefs.v = 2; save(); }
 
@@ -1076,12 +1076,19 @@ function showBoards() {
 // ------------------------------------------------------------------------------------------------
 // best spots across the slate
 // ------------------------------------------------------------------------------------------------
+const dayOf = g => String(g.tip).split(',')[0];   // the Melbourne day shown on the game cards
 function showSpots() {
   const stat = prefs.spotStat;
+  const days = [...new Set(IDX.games.map(dayOf))];
+  if (!days.includes(prefs.spotDay)) prefs.spotDay = 'all';   // a saved filter can outlive the slate it was picked on
+  const dayGames = IDX.games.filter(g => prefs.spotDay === 'all' || dayOf(g) === prefs.spotDay);
+  if (!dayGames.some(g => g.id === prefs.spotGame)) prefs.spotGame = 'all';
+  const picked = prefs.spotGame === 'all' ? null : gameById(prefs.spotGame);
+  const shown = new Set(picked ? [picked.id] : dayGames.map(g => g.id));
   const rows = [];
   for (const [id, p] of Object.entries(IDX.players)) {
     for (const [gid, g] of Object.entries(p.games)) {
-      if (!g.proj || !(g.p > 0) || (g.min || 0) < 15) continue;
+      if (!shown.has(gid) || !g.proj || !(g.p > 0) || (g.min || 0) < 15) continue;
       const mu = projOf(p, gid, stat);
       const e = (g.eff || {})[stat];
       const boost = e != null ? mu - mu / (1 + e) : 0;
@@ -1092,7 +1099,9 @@ function showSpots() {
   }
   const key = { boost: r => r.boost, min: r => r.dMin, avg: r => r.vsAvg }[prefs.spotKey] || (r => r.boost);
   const list = rows.filter(r => key(r) != null).sort((a, b) => prefs.spotDir === 'top' ? key(b) - key(a) : key(a) - key(b)).slice(0, 40);
-  view.innerHTML = `<section class="panel"><h2>Best spots tonight</h2>
+  view.innerHTML = `<section class="panel"><h2>Best spots ${picked ? `· ${esc(picked.away)} @ ${esc(picked.home)}` : prefs.spotDay !== 'all' ? `· ${esc(prefs.spotDay)}` : 'tonight'}</h2>
+    <div class="bar" style="margin-bottom:8px"><span class="lab">Games</span>${days.length > 1 ? seg('spotDay', [['all', 'All days'], ...days.map(d => [d, d])], prefs.spotDay) : ''}
+      <select class="sel" id="spotGame" aria-label="Game" style="max-width:100%"><option value="all">All games</option>${dayGames.map(g => `<option value="${esc(g.id)}"${g.id === prefs.spotGame ? ' selected' : ''}>${esc(g.away)} @ ${esc(g.home)} · ${esc(prefs.spotDay === 'all' && days.length > 1 ? g.tip : g.tip.split(', ')[1])}</option>`).join('')}</select></div>
     <div class="bar" style="margin-bottom:8px"><span class="lab">Stat</span>${seg('spotStat', ['pts', 'reb', 'ast', 'tpm', 'pra'].map(s => [s, STAT[s].short]), stat)}</div>
     <div class="bar" style="margin-bottom:12px"><span class="lab">Rank by</span>${seg('spotKey', [['boost', 'Matchup boost'], ['min', 'Minutes up'], ['avg', 'Proj vs season avg']], prefs.spotKey)}
       ${seg('spotDir', [['top', 'Overs (biggest)'], ['bottom', 'Unders (lowest)']], prefs.spotDir)}</div>
@@ -1100,10 +1109,11 @@ function showSpots() {
     <div class="tw"><table><thead><tr><th>Player</th><th>Game</th><th class="n">Min</th><th class="n">Proj ${STAT[stat].short}</th><th class="n">Season</th><th class="n">Matchup</th></tr></thead><tbody>
     ${list.map(r => { const gm = gameById(r.gid); return `<tr class="click" data-p="${r.id}" data-g="${r.gid}"><td><span class="pname">${esc(r.p.name)}</span> <span class="badge pos">${r.p.pos}</span> ${statusBadge(r.g)}<span class="sub">${esc(r.p.team)}</span></td>
       <td class="small">${r.p.team === gm.home ? 'vs' : '@'} ${esc(r.g.opp)}<span class="sub">${esc(gm.tip)}</span></td><td class="n">${minutesText(r.p, r.g)}</td>
-      <td class="n"><b>${fmt(r.mu)}</b></td><td class="n">${fmt(r.avg)}<span class="sub">${r.p.gp} gp</span></td><td class="n" style="${heat(r.e)}">${sgn(r.boost)}<span class="sub">${r.e != null ? sgn(100 * r.e, 0) + '%' : ''}</span></td></tr>`; }).join('')}
+      <td class="n"><b>${fmt(r.mu)}</b></td><td class="n">${fmt(r.avg)}<span class="sub">${r.p.gp} gp</span></td><td class="n" style="${heat(r.e)}">${sgn(r.boost)}<span class="sub">${r.e != null ? sgn(100 * r.e, 0) + '%' : ''}</span></td></tr>`; }).join('') || '<tr><td colspan="6" class="small">No players projected for 15+ minutes here.</td></tr>'}
     </tbody></table></div>
     <p class="note">Players projected for 15+ minutes. Matchup boost = how much of the projection comes from the opponent's defence against his position. Minutes up = projected minutes tonight minus his season average (injuries to teammates show up here). Season averages from a handful of games are noisy, so lean on the projection and the model %, not the gap alone.</p></section>`;
   onSeg(view, (k, v) => { prefs[k] = v; save(); showSpots(); });
+  $('#spotGame').addEventListener('change', e => { prefs.spotGame = e.target.value; save(); showSpots(); });
   $$('tr[data-p]', view).forEach(tr => tr.addEventListener('click', () => { prefs.stat = stat; save(); location.hash = `#/p/${tr.dataset.p}/${tr.dataset.g}`; }));
 }
 
