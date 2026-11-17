@@ -1606,7 +1606,7 @@ const saveLS = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); ret
 let BETS = loadLS(BET_KEY, []);
 let SLIP = loadLS(SLIP_KEY, []);
 const TRK = Object.assign({ unit: 10, mode: 'money', hide: {}, day: 'all', status: 'all', sub: 'bets', adv: false }, loadLS(TRK_KEY, {}));
-const saveBets = () => { if (!saveLS(BET_KEY, BETS)) toast('This phone wouldn\'t save your bets (storage full or private browsing).'); };
+const saveBets = () => { if (!saveLS(BET_KEY, BETS)) toast('This phone wouldn\'t save your bets (storage full or private browsing).'); scheduleSync(); };
 const saveSlip = () => saveLS(SLIP_KEY, SLIP), saveTrk = () => saveLS(TRK_KEY, TRK);
 const PLATFORMS = ['Sportsbet', 'TAB', 'PointsBet', 'Ladbrokes', 'Neds', 'Betfair', 'Bet365'];
 const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -1921,8 +1921,8 @@ function renderBetsTab(el) {
     on('[data-del]', () => {
       if (!confirm(`Remove this ${fmtMoney(b.stake)} bet on ${b.legs.map(l => surname(l.name)).join(', ')}?`)) return;
       const i = BETS.indexOf(b);
-      BETS.splice(i, 1); saveBets(); renderTrk();
-      toast('Bet removed.', () => { BETS.splice(Math.min(i, BETS.length), 0, b); saveBets(); renderTrk(); });
+      BETS.splice(i, 1); SYNC.dead[b.id] = Date.now(); saveSync(); saveBets(); renderTrk();
+      toast('Bet removed.', () => { BETS.splice(Math.min(i, BETS.length), 0, b); delete SYNC.dead[b.id]; delete SYNC.base[b.id]; saveSync(); saveBets(); renderTrk(); });
     });
     on('[data-reuse]', () => {
       let n = 0;
@@ -2032,11 +2032,12 @@ function renderTrk() {
   if (TRK.sub === 'analytics') renderAnalytics(el); else renderBetsTab(el);
 }
 function showBets() {
-  view.innerHTML = `<section class="panel"><h2>Bet tracker</h2>
+  view.innerHTML = `<section class="panel" id="syncbox"></section>
+    <section class="panel"><h2>Bet tracker</h2>
       <div class="bar" style="margin-bottom:12px">${seg('trkSub', [['bets', 'Bets'], ['analytics', 'Analytics']], TRK.sub === 'analytics' ? 'analytics' : 'bets')}${seg('trkMode', [['money', 'Money'], ['units', 'Units']], TRK.mode)}</div>
       <div id="trk"></div>
       <p class="note">Bets grade themselves: from ESPN's box score a couple of hours after tip-off once the game is final, or from the box scores the model publishes each run. A player who doesn't take the court is void (stake back), and so is a whole-number line hit exactly. Units = stake ÷ your unit size when you placed it.</p></section>
-    <section class="panel"><h2>Backup</h2><p class="note" style="margin:0 0 8px">Your bets are saved on this phone only (in this app). Copy a backup now and then and keep it somewhere safe (Notes, email to yourself); restoring adds any bets you don't already have.</p>
+    <section class="panel"><h2>Backup</h2><p class="note" style="margin:0 0 8px">Your bets are kept on this device, and in your account too once you sign in above. A copied backup is still a good idea now and then (Notes, email to yourself); restoring adds any bets you don't already have.</p>
       <div class="bar"><button class="btn sm ghost" type="button" id="bkcopy">Copy backup</button><button class="btn sm ghost" type="button" id="bkfile">Download file</button><button class="btn sm ghost" type="button" id="bkopen">Restore…</button></div>
       <div id="bkrest" hidden style="margin-top:8px"><textarea class="einp" id="bktext" rows="4" style="width:100%" placeholder="Paste a backup here"></textarea><div class="bar" style="margin-top:6px"><button class="btn sm" type="button" id="bkgo">Restore</button><span class="small" id="bkmsg"></span></div></div></section>`;
   onSeg(view, (k, v) => { if (k === 'trkSub') TRK.sub = v; if (k === 'trkMode') TRK.mode = v; saveTrk(); EDIT_ID = null; showBets(); });
@@ -2055,13 +2056,214 @@ function showBets() {
     saveBets(); $('#bkmsg').textContent = `Added ${add.length} bet${add.length === 1 ? '' : 's'} (${bets.length - add.length} already here).`; renderTrk();
   };
   renderTrk();
+  renderSyncBox();
+  if (SB_USER) syncNow();
+  else if (!SB && hasSession()) initSync();
   gradeBets().then(ch => { if (ch && location.hash.startsWith('#/bets')) renderTrk(); });
 }
+const hasSession = () => { try { return !!localStorage.getItem(SB_SESSION); } catch (e) { return false; } };
+
+// ------------------------------------------------------------------------------------------------
+// sync between devices: the EPL site's Supabase project and login, its own table nba_bets (one row per bet, the bet
+// as JSON, soft deletes, updated_at set by the server). Bets still live in localStorage, so the page works offline
+// and signed out; signing in merges this device's bets with the account's. On the laptop the EPL site's session is
+// shared (same origin, same storage key), so if you're signed in there you're signed in here.
+// Merge rule per bet: changed only on the other device -> take theirs; changed here (or both) -> this device's goes up;
+// deleted anywhere -> deleted everywhere.
+// ------------------------------------------------------------------------------------------------
+const SB_URL = 'https://wqkywyjarwxvmarztuoj.supabase.co', SB_KEY = 'sb_publishable_6ERpTfQ0NfVMDXzd6XdPVw_pcRybEJ6';
+const SB_JS = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+const SB_SESSION = 'sb-wqkywyjarwxvmarztuoj-auth-token';
+const SETUP_SQL = `-- NBA bet tracker sync for the Line Board matchups page. Run once: Supabase > SQL Editor > New query > Run.
+create table if not exists public.nba_bets (
+  id text primary key,
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  bet jsonb not null default '{}'::jsonb,
+  deleted boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+create index if not exists nba_bets_user_updated on public.nba_bets (user_id, updated_at);
+alter table public.nba_bets enable row level security;
+drop policy if exists "nba_bets read own" on public.nba_bets;
+drop policy if exists "nba_bets add own" on public.nba_bets;
+drop policy if exists "nba_bets change own" on public.nba_bets;
+drop policy if exists "nba_bets delete own" on public.nba_bets;
+create policy "nba_bets read own" on public.nba_bets for select to authenticated using ((select auth.uid()) = user_id);
+create policy "nba_bets add own" on public.nba_bets for insert to authenticated with check ((select auth.uid()) = user_id);
+create policy "nba_bets change own" on public.nba_bets for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+create policy "nba_bets delete own" on public.nba_bets for delete to authenticated using ((select auth.uid()) = user_id);
+grant select, insert, update, delete on public.nba_bets to authenticated;
+create or replace function public.nba_bets_touch() returns trigger language plpgsql set search_path = '' as $$
+begin new.updated_at := now(); return new; end $$;
+drop trigger if exists nba_bets_touch on public.nba_bets;
+create trigger nba_bets_touch before insert or update on public.nba_bets for each row execute function public.nba_bets_touch();`;
+const SYNC_KEY = 'lineboard:mu:sync';      // { uid, base: {id: hash at last sync}, dead: {id: time deleted here}, pulled, full, at }
+const SYNC = Object.assign({ uid: null, base: {}, dead: {}, pulled: null, full: 0, at: 0 }, loadLS(SYNC_KEY, {}));
+const saveSync = () => saveLS(SYNC_KEY, SYNC);
+let SB = null, SB_LOADING = null, SB_USER = null;
+const SYNC_UI = { busy: false, err: '', setup: false };
+function sbClient() {
+  if (SB) return Promise.resolve(SB);
+  if (!SB_LOADING) SB_LOADING = new Promise((res, rej) => {
+    if (window.supabase && window.supabase.createClient) return res();
+    const s = document.createElement('script');
+    s.src = SB_JS; s.async = true; s.onload = () => res();
+    s.onerror = () => rej(new Error('Couldn\'t load the sync library - check the connection.'));
+    document.head.appendChild(s);
+  }).then(() => {
+    SB = window.supabase.createClient(SB_URL, SB_KEY);
+    SB.auth.onAuthStateChange((ev, session) => {
+      const u = session && session.user || null;
+      if ((u && u.id) === (SB_USER && SB_USER.id)) return;
+      SB_USER = u;
+      setTimeout(onUser, 0);               // outside the auth callback (calling Supabase inside it can deadlock)
+    });
+    return SB;
+  }).catch(e => { SB_LOADING = null; throw e; });
+  return SB_LOADING;
+}
+function onUser() {
+  if (SB_USER && SYNC.uid !== SB_USER.id) Object.assign(SYNC, { uid: SB_USER.id, base: {}, pulled: null, full: 0 });   // new account: merge from scratch
+  saveSync(); renderSyncBox();
+  if (SB_USER) syncNow();
+}
+async function initSync() {
+  try {
+    const sb = await sbClient();
+    const { data } = await sb.auth.getSession();
+    const u = data && data.session ? data.session.user : null;
+    if ((u && u.id) !== (SB_USER && SB_USER.id)) { SB_USER = u; onUser(); }
+    else renderSyncBox();
+  } catch (e) { SYNC_UI.err = e.message; renderSyncBox(); }
+}
+// a bet's fingerprint, the same however its keys are ordered (the database stores JSON with its own key order)
+function canon(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v) ?? 'null';
+  if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+  return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
+}
+function hashOf(b) { const s = canon(b); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + s.length; }
+const isSetupErr = e => !!e && (e.code === 'PGRST205' || e.code === '42P01' || /could not find the table|relation .*nba_bets.* does not exist/i.test(e.message || ''));
+let SYNC_P = null, SYNC_AGAIN = false, SYNC_T = null;
+function scheduleSync(ms = 1500) { if (!SB_USER) return; clearTimeout(SYNC_T); SYNC_T = setTimeout(syncNow, ms); }
+function syncNow() {
+  if (!SB || !SB_USER) return Promise.resolve(false);
+  if (SYNC_P) { SYNC_AGAIN = true; return SYNC_P; }
+  SYNC_P = (async () => {
+    SYNC_UI.busy = true; SYNC_UI.err = ''; renderSyncBox();
+    let changedHere = false;
+    try {
+      // pull what changed since the last pull (server times, 5 minutes of overlap); everything once a day
+      const full = !SYNC.pulled || Date.now() - (SYNC.full || 0) > 24 * 3600e3;
+      const since = full ? null : new Date(Date.parse(SYNC.pulled) - 5 * 60e3).toISOString();
+      const rows = [];
+      for (let from = 0; ; from += 1000) {
+        let q = SB.from('nba_bets').select('id,bet,deleted,updated_at');
+        if (since) q = q.gt('updated_at', since);
+        const { data, error } = await q.order('updated_at', { ascending: true }).range(from, from + 999);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      const byId = new Map(BETS.map(b => [b.id, b]));
+      for (const r of rows) {
+        const L = byId.get(r.id);
+        if (r.deleted) {
+          if (L) { BETS = BETS.filter(b => b.id !== r.id); byId.delete(r.id); changedHere = true; }
+          delete SYNC.base[r.id]; delete SYNC.dead[r.id];
+          continue;
+        }
+        if (SYNC.dead[r.id] || !r.bet || !r.bet.id) continue;       // deleted here: goes up below
+        const rh = hashOf(r.bet);
+        if (!L) { BETS.push(r.bet); byId.set(r.id, r.bet); SYNC.base[r.id] = rh; changedHere = true; continue; }
+        const lh = hashOf(L);
+        if (lh === rh) SYNC.base[r.id] = rh;
+        else if (lh === SYNC.base[r.id]) { BETS[BETS.indexOf(L)] = r.bet; byId.set(r.id, r.bet); SYNC.base[r.id] = rh; changedHere = true; }
+      }
+      // push this device's new and changed bets, and its deletions
+      const up = [];
+      for (const b of BETS) { const h = hashOf(b); if (SYNC.base[b.id] !== h) up.push({ row: { id: b.id, user_id: SB_USER.id, bet: b, deleted: false }, h }); }
+      for (const id of Object.keys(SYNC.dead)) up.push({ row: { id, user_id: SB_USER.id, bet: {}, deleted: true } });
+      for (let i = 0; i < up.length; i += 100) {
+        const chunk = up.slice(i, i + 100);
+        const { error } = await SB.from('nba_bets').upsert(chunk.map(x => x.row), { onConflict: 'id' });
+        if (error) throw error;
+        chunk.forEach(x => { if (x.row.deleted) { delete SYNC.dead[x.row.id]; delete SYNC.base[x.row.id]; } else SYNC.base[x.row.id] = x.h; });
+      }
+      const newest = rows.reduce((m, r) => r.updated_at > m ? r.updated_at : m, SYNC.pulled || '');
+      if (newest) SYNC.pulled = newest;
+      if (full) SYNC.full = Date.now();
+      SYNC.at = Date.now(); SYNC_UI.setup = false;
+      if (changedHere) { BETS.sort((a, b) => Date.parse(b.placedAt) - Date.parse(a.placedAt)); saveLS(BET_KEY, BETS); }
+    } catch (e) {
+      SYNC_UI.setup = isSetupErr(e);
+      SYNC_UI.err = SYNC_UI.setup ? 'Sync isn\'t set up yet: the nba_bets table doesn\'t exist in the Supabase project. Run the setup SQL below once.'
+        : /jwt|token|auth/i.test(e.message || '') ? 'Your sign-in has expired. Sign in again.' : 'Couldn\'t sync: ' + (e.message || e);
+    } finally {
+      saveSync();
+      SYNC_UI.busy = false; SYNC_P = null;
+      renderSyncBox();
+      if (changedHere && location.hash.startsWith('#/bets')) renderTrk();
+      if (SYNC_AGAIN) { SYNC_AGAIN = false; scheduleSync(300); }
+    }
+    return changedHere;
+  })();
+  return SYNC_P;
+}
+function renderSyncBox() {
+  const el = $('#syncbox');
+  if (!el) return;
+  const ago = SYNC.at ? whenTxt(SYNC.at) : '';
+  if (SB_USER) {
+    el.innerHTML = `<h2>Sync</h2><div class="bar"><span class="small">Signed in as <b>${esc(SB_USER.email || 'your account')}</b> · ${SYNC_UI.busy ? 'syncing…' : ago ? `last synced ${esc(ago)}` : 'not synced yet'}</span>
+        <button class="btn sm ghost" type="button" id="sbsync" ${SYNC_UI.busy ? 'disabled' : ''}>Sync now</button><button class="linkbtn" type="button" id="sbout">Sign out</button></div>
+      ${SYNC_UI.err ? `<p class="note err">${esc(SYNC_UI.err)}</p>` : '<p class="note" style="margin:6px 0 0">Your bets sync between every device you sign in on: when you open this page, a few seconds after any change, and when you come back to the app.</p>'}
+      ${SYNC_UI.setup ? setupHTML() : ''}`;
+    $('#sbsync').onclick = () => syncNow();
+    $('#sbout').onclick = async () => { try { await SB.auth.signOut(); } catch (e) {} SB_USER = null; renderSyncBox(); };
+  } else {
+    el.innerHTML = `<h2>Sync</h2><p class="note" style="margin:0 0 8px">Sign in with your <b>EPL site</b> email and password to keep your bets in step between your phone and laptop. Bets already on this device are kept and added to your account.</p>
+      <div class="frow"><label>Email<input id="sbemail" type="email" autocomplete="username" inputmode="email"></label><label>Password<input id="sbpw" type="password" autocomplete="current-password"></label></div>
+      <div class="bar" style="margin-top:8px"><button class="btn sm" type="button" id="sbin">Sign in</button><span class="small" id="sbmsg">${esc(SYNC_UI.err)}</span></div>`;
+    const go = async () => {
+      const email = $('#sbemail').value.trim(), pw = $('#sbpw').value;
+      if (!email || !pw) { $('#sbmsg').textContent = 'Put in your email and password.'; return; }
+      $('#sbin').disabled = true; $('#sbmsg').textContent = 'Signing in…';
+      try {
+        const sb = await sbClient();
+        const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
+        if (error) throw error;
+        SYNC_UI.err = '';
+        if (data && data.user && (!SB_USER || SB_USER.id !== data.user.id)) { SB_USER = data.user; onUser(); }
+      } catch (e) {
+        $('#sbmsg').textContent = /invalid login/i.test(e.message || '') ? 'Wrong email or password - it\'s the same login as the EPL site.' : (e.message || 'Couldn\'t sign in.');
+        $('#sbin').disabled = false;
+      }
+    };
+    $('#sbin').onclick = go;
+    $('#sbpw').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  }
+}
+function setupHTML() {
+  return `<details class="more" open style="margin-top:8px"><summary>Setup SQL (once, in Supabase)</summary>
+    <p class="note">Open supabase.com → the EPL project → SQL Editor → New query, paste this, press Run, then tap Sync now. It makes a table only you can read or write (row-level security), separate from the EPL tracker.</p>
+    <div class="bar" style="margin:6px 0"><button class="btn sm ghost" type="button" id="sqlcopy">Copy SQL</button></div>
+    <pre class="small" style="white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);padding:8px;border-radius:8px;max-height:220px;overflow:auto">${esc(SETUP_SQL)}</pre></details>`;
+}
+document.addEventListener('click', async e => {
+  if (!e.target || e.target.id !== 'sqlcopy') return;
+  try { await navigator.clipboard.writeText(SETUP_SQL); toast('SQL copied.'); } catch (err) { toast('Couldn\'t copy - select the text instead.'); }
+});
+let LAST_VIS_SYNC = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && SB_USER && Date.now() - LAST_VIS_SYNC > 30e3) { LAST_VIS_SYNC = Date.now(); syncNow(); }
+});
 
 // ------------------------------------------------------------------------------------------------
 function start(d) {
   IDX = d;
   renderSlip();
+  if (hasSession() && !SB) initSync();                 // signed in before (here or on the EPL site): sync in the background
   SEASON_START = String(d.season || '').slice(0, 4) + '-08-01';
   $('#season').textContent = `NBA ${d.season} · ${d.label || ''}`;
   $('#stamp').textContent = `Updated ${d.generated} (Melbourne) · ${d.games.length} games · positions from Basketball-Reference`;
