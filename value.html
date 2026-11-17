@@ -117,7 +117,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
     <div>
       <div class="eyebrow">Line Board</div>
       <h1>Odds <span>check</span></h1>
-      <p>One tap pulls current prices from TAB, Sportsbet, Betfair, PointsBet, Ladbrokes and Neds, then checks every head to head, line and total against the board's win chances. Nothing updates on its own, so you only use credits when you tap.</p>
+      <p>One tap pulls current prices from <span id="booklist">TAB, Sportsbet and Betfair</span>, then checks every head to head, line and total against the board's win chances. Nothing updates on its own, so you only use credits when you tap.</p>
     </div>
     <a class="back" href="./">← Back to the board</a>
   </header>
@@ -171,8 +171,13 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 <script id="main">
 'use strict';
 // ---- set-up -------------------------------------------------------------------------------------
-const BOOKS = [['tab', 'TAB'], ['sportsbet', 'Sportsbet'], ['betfair_ex_au', 'Betfair'], ['pointsbetau', 'PointsBet'], ['ladbrokes_au', 'Ladbrokes'], ['neds', 'Neds']];
+// PAUSED_BOOKS: bookies switched off for now (user asked 17 Nov 2026: no PointsBet, Ladbrokes or Neds). Nothing is
+// fetched from them and saved prices from them are ignored. Empty the list to bring them back (matchups.html has its own).
+const PAUSED_BOOKS = ['pointsbetau', 'ladbrokes_au', 'neds'];
+const BOOKS = [['tab', 'TAB'], ['sportsbet', 'Sportsbet'], ['betfair_ex_au', 'Betfair'], ['pointsbetau', 'PointsBet'], ['ladbrokes_au', 'Ladbrokes'], ['neds', 'Neds']]
+  .filter(b => !PAUSED_BOOKS.includes(b[0]));
 const BOOK_NAME = Object.fromEntries(BOOKS);
+{ const el = document.getElementById('booklist'), n = BOOKS.map(b => b[1]); if (el) el.textContent = n.length > 1 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n.join(''); }
 // When the best price is at PointsBet, Ladbrokes or Neds, the best of these is shown as well
 const MAIN_BOOKS = ['sportsbet', 'tab', 'betfair_ex_au'];
 const BOOK_SHORT = { tab: 'TAB', sportsbet: 'SB', betfair_ex_au: 'BF', pointsbetau: 'PB', ladbrokes_au: 'LB', neds: 'Neds' };
