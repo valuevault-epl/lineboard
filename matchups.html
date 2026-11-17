@@ -1630,7 +1630,7 @@ const loadLS = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) ||
 const saveLS = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
 let BETS = loadLS(BET_KEY, []);
 let SLIP = loadLS(SLIP_KEY, []);
-const TRK = Object.assign({ unit: 10, mode: 'money', hide: {}, day: 'all', status: 'all', sub: 'bets', adv: false,
+const TRK = Object.assign({ hide: {}, day: 'all', status: 'all', sub: 'bets', adv: false,
   ag1: 'edge', ag2: '', ahow: 'flat', ascope: 'all', aper: 'all', amin: 1, asort: '', adir: -1, aflt: [], afd: 'side', aopen: '', lmin: 15 }, loadLS(TRK_KEY, {}));
 const saveBets = () => { if (!saveLS(BET_KEY, BETS)) toast('This phone wouldn\'t save your bets (storage full or private browsing).'); scheduleSync(); };
 const saveSlip = () => saveLS(SLIP_KEY, SLIP), saveTrk = () => saveLS(TRK_KEY, TRK);
@@ -1638,11 +1638,10 @@ const PLATFORMS = ['Sportsbet', 'TAB', 'PointsBet', 'Ladbrokes', 'Neds', 'Betfai
 const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 const round2 = x => Math.round(x * 100) / 100;
 const fmtMoney = n => '$' + (+n).toFixed(2);
-const fmtPL = (n, mode = TRK.mode) => n == null ? '–' : (n > 0 ? '+' : n < 0 ? '−' : '') + (mode === 'units' ? Math.abs(n).toFixed(2) + 'u' : '$' + Math.abs(n).toFixed(2));
+const fmtPL = n => n == null ? '–' : (n > 0 ? '+' : n < 0 ? '−' : '') + '$' + Math.abs(n).toFixed(2);
 const plCls = n => n > 0 ? 'up' : n < 0 ? 'down' : '';
-const betUnits = b => b.unitSize > 0 ? b.stake / b.unitSize : null;
-const plOf = (b, mode = TRK.mode) => b.profit == null ? null : mode === 'units' ? (b.unitSize > 0 ? b.profit / b.unitSize : 0) : b.profit;
-const stakeOf = (b, mode = TRK.mode) => mode === 'units' ? (betUnits(b) || 0) : b.stake;
+const plOf = b => b.profit == null ? null : b.profit;
+const stakeOf = b => b.stake;
 const sideTxt = l => `${l.side === 'over' ? 'Over' : 'Under'} ${lineTxt(l.line)} ${STAT[l.stat] ? STAT[l.stat].short : l.stat}`;
 const whenFull = iso => { const d = new Date(iso); return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 let TOAST_T = null;
@@ -1723,14 +1722,7 @@ function addToSlip(spec) {
 }
 const inSlip = (gid, pid, stat, side, line) => SLIP.some(l => l.id === [gid, pid, stat, side, line].join('|'));
 
-// stake suggestion: the board's NBA Kelly settings (fraction, max and bank, all in units)
-const boardGet = (k, d) => { try { const v = localStorage.getItem('nblboard:' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
-function kellyUnits(win, push, odds) {
-  const frac = +boardGet('nba:k_h2h', 7.5), max = +boardGet('kmax', 3), bank = +boardGet('kbank', 100);
-  const b = odds - 1, lose = Math.max(0, 1 - win - push), full = (win * b - lose) / b;
-  if (!(frac > 0) || !(b > 0) || !(full > 0)) return 0;
-  return Math.min(Math.round(full * frac / 100 * bank * 4) / 4, max);
-}
+// no stake suggestion or unit sizes here: the user stakes by confidence (17 Nov 2026), in dollars
 function slipChance() {                      // the model's chance the whole slip wins; null for same-game multis
   if (!SLIP.length || SLIP.some(l => l.model == null)) return null;
   if (new Set(SLIP.map(l => l.gid)).size < SLIP.length) return null;          // same-game legs move together
@@ -1748,11 +1740,9 @@ function renderSlip() {
   if (!SLIP_OPEN) return;
   const el = $('#slip');
   const prodOdds = SLIP.reduce((t, l) => t * (l.odds || 1), 1);
-  const f = SLIP_FORM || (SLIP_FORM = { odds: SLIP.length && SLIP.every(l => l.odds) ? round2(prodOdds).toFixed(2) : '', stake: '', touched: false,
+  const f = SLIP_FORM || (SLIP_FORM = { odds: SLIP.length && SLIP.every(l => l.odds) ? round2(prodOdds).toFixed(2) : '', stake: '',
     platform: (SLIP.find(l => PLATFORMS.includes(l.book)) || {}).book || 'Sportsbet', other: '', note: '' });
   const odds = parseFloat(f.odds), ch = slipChance();
-  const sug = ch && odds > 1 ? kellyUnits(ch.win, ch.push, odds) : null;
-  if (!f.touched) f.stake = sug ? round2(sug * TRK.unit).toFixed(2) : TRK.unit ? (+TRK.unit).toFixed(2) : '';
   const ev = ch && odds > 1 ? ch.win * odds + ch.push - 1 : null;
   el.innerHTML = `<div class="sheet-head"><h2>Bet slip</h2>${SLIP.length ? '<button class="linkbtn" id="slipclear" type="button">Clear</button>' : ''}<button class="xbtn" id="slipclose" type="button" aria-label="Close">×</button></div>
     ${SLIP.length ? SLIP.map((l, i) => `<div class="slipleg"><div><b>${esc(sideTxt(l))}</b> · ${esc(l.name)} <span class="badge pos">${esc(l.pos)}</span>
@@ -1763,11 +1753,10 @@ function renderSlip() {
       : '<p class="small">Empty. Tap <b>+</b> on the Props tab, or <b>Add to slip</b> under a player\'s price check.</p>'}
     ${SLIP.length ? `<div class="form">
       <div class="frow"><label>Odds taken<input id="sodds" type="number" inputmode="decimal" step="0.01" min="1.01" value="${esc(f.odds)}" placeholder="1.90"></label>
-        <label>Stake ($)<input id="sstake" type="number" inputmode="decimal" step="0.5" min="0" value="${esc(f.stake)}"></label>
-        <label>Unit size ($)<input id="sunit" type="number" inputmode="decimal" step="1" min="0.01" value="${esc(TRK.unit)}"></label></div>
+        <label>Stake ($)<input id="sstake" type="number" inputmode="decimal" step="0.5" min="0" value="${esc(f.stake)}" placeholder="10"></label></div>
       <p class="note" style="margin:0">${SLIP.length > 1 ? `${SLIP.length}-leg ${new Set(SLIP.map(l => l.gid)).size < SLIP.length ? 'same-game multi' : 'multi'}: legs multiply to ${prodOdds.toFixed(2)}; put in the price the bookie actually gave you. ` : ''}${
-        ch ? `Model ${pct(ch.win, 1)}${odds > 1 ? ` → edge <b class="${plCls(ev)}">${sgn(100 * ev, 1)}%</b>` : ''}${sug != null ? ` · Kelly ${sug ? `<b>${sug}u</b> = ${fmtMoney(sug * TRK.unit)}` : 'says no bet at this price'} (the board's NBA Kelly settings)` : ''}.`
-        : SLIP.length > 1 ? 'No stake suggestion for same-game legs: they win and lose together, so multiplying their chances would overstate the price.' : ''}</p>
+        ch ? `Model ${pct(ch.win, 1)}${odds > 1 ? ` → edge <b class="${plCls(ev)}">${sgn(100 * ev, 1)}%</b>` : ''}.`
+        : SLIP.length > 1 ? 'No combined model chance for same-game legs: they win and lose together, so multiplying their chances would overstate it.' : ''}</p>
       <div class="frow"><label>Bookie<select id="splat">${[...PLATFORMS, 'Other'].map(p => `<option${p === f.platform ? ' selected' : ''}>${p}</option>`).join('')}</select></label>
         <label${f.platform === 'Other' ? '' : ' hidden'} id="sotherl">Bookie name<input id="sother" type="text" value="${esc(f.other)}"></label></div>
       <div class="frow"><label>Note (optional)<input id="snote" type="text" maxlength="200" value="${esc(f.note)}" placeholder="e.g. boosted, cash-out, why"></label></div>
@@ -1778,8 +1767,7 @@ function renderSlip() {
   if (!SLIP.length) return;
   const keepF = () => { f.odds = $('#sodds').value; f.stake = $('#sstake').value; f.platform = $('#splat').value; f.other = $('#sother').value; f.note = $('#snote').value; };
   $('#sodds').addEventListener('change', () => { keepF(); renderSlip(); });
-  $('#sstake').addEventListener('input', () => { f.touched = true; keepF(); });
-  $('#sunit').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { TRK.unit = v; saveTrk(); } keepF(); renderSlip(); });
+  $('#sstake').addEventListener('input', keepF);
   $('#splat').addEventListener('change', () => { keepF(); $('#sotherl').hidden = f.platform !== 'Other'; });
   ['#sother', '#snote'].forEach(s => $(s).addEventListener('input', keepF));
   $('#splace').onclick = async () => {
@@ -1794,8 +1782,8 @@ function renderSlip() {
       if (!SLIP.length) return;
     }
     const bet = { id: uid(), placedAt: new Date().toISOString(), legs: SLIP.map(l => ({ ...l, status: 'Pending', actual: null })),
-      platform: f.platform === 'Other' ? f.other.trim() : f.platform, oddsTaken: round2(o), stake: round2(s), unitSize: TRK.unit,
-      note: f.note.trim(), model: ch ? +ch.win.toFixed(4) : null, edge: ev != null ? +ev.toFixed(4) : null, kelly: sug,
+      platform: f.platform === 'Other' ? f.other.trim() : f.platform, oddsTaken: round2(o), stake: round2(s),
+      note: f.note.trim(), model: ch ? +ch.win.toFixed(4) : null, edge: ev != null ? +ev.toFixed(4) : null,
       status: 'Pending', settledAt: null, profit: null };
     BETS.unshift(bet); saveBets();
     SLIP = []; saveSlip(); SLIP_FORM = null;
@@ -1940,7 +1928,6 @@ function legDetails(l, b) {
   return `<dl class="kvt">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
 }
 function betCard(b) {
-  const units = betUnits(b);
   if (b.id === EDIT_ID) {
     const custom = !PLATFORMS.includes(b.platform);
     return `<article class="betcard" data-bet="${esc(b.id)}">
@@ -1963,10 +1950,9 @@ function betCard(b) {
     <div class="bc-top"><span class="st ${b.status.toLowerCase()}">${esc(b.status)}</span><span class="small">${b.legs.length > 1 ? b.legs.length + '-leg multi · ' : ''}${esc(b.platform)} · placed ${esc(whenFull(b.placedAt))}</span>
       <b class="plv ${plCls(pl)}">${b.status === 'Pending' ? '' : fmtPL(pl)}</b></div>
     ${b.legs.map(l => legLine(l, b)).join('')}
-    <div class="bc-nums"><span>Odds <b>${b.oddsTaken.toFixed(2)}</b></span><span>Stake <b>${fmtMoney(b.stake)}</b>${units != null ? ` (${units.toFixed(2)}u)` : ''}</span>
+    <div class="bc-nums"><span>Odds <b>${b.oddsTaken.toFixed(2)}</b></span><span>Stake <b>${fmtMoney(b.stake)}</b></span>
       <span>${b.status === 'Pending' ? 'To return' : 'Returned'} <b>${fmtMoney(b.status === 'Pending' ? b.stake * b.oddsTaken : b.stake + (b.profit || 0))}</b></span>
-      ${b.model != null ? `<span>Model <b>${pct(b.model, 1)}</b>${b.edge != null ? ` · edge <b class="${plCls(b.edge)}">${sgn(100 * b.edge, 1)}%</b>` : ''}</span>` : ''}
-      ${b.kelly != null ? `<span>Kelly said <b>${b.kelly}u</b></span>` : ''}</div>
+      ${b.model != null ? `<span>Model <b>${pct(b.model, 1)}</b>${b.edge != null ? ` · edge <b class="${plCls(b.edge)}">${sgn(100 * b.edge, 1)}%</b>` : ''}</span>` : ''}</div>
     ${b.voidAdjusted && b.paid == null ? '<p class="note" style="margin:0">A leg was void, so the payout here is the multi\'s price divided by that leg\'s own odds. If the bookie paid something else, put it in Edit → Paid out.</p>' : ''}
     ${b.note ? `<p class="note" style="margin:0">Note: ${esc(b.note)}</p>` : ''}
     <details class="more"><summary>All details</summary>${b.legs.map(l => legDetails(l, b)).join('<hr style="border:0;border-top:1px solid var(--line);margin:8px 0">')}</details>
@@ -2034,7 +2020,7 @@ function renderBetsTab(el) {
 }
 // ---- analytics -------------------------------------------------------------------------------------------
 // One row per settled LEG (a single is one leg; each leg of a multi counts on its own), sliced by anything saved with
-// it. Two ways to count money: "1u per leg" = every leg as a 1-unit single at its own price (judges the picks, not the
+// it. Two ways to count money: "$1 on every leg" = every leg as a $1 single at its own price (judges the picks, not the
 // staking, and keeps multis fair), or "your stakes" (a multi's stake and profit split evenly over its legs).
 // z = how far the profit is from break-even in luck-widths: a fair bet at odds o has variance (o - 1) per unit staked.
 function anaItems() {
@@ -2088,8 +2074,16 @@ const B = {
   hr: ['Under 30%', '30–45%', '45–55%', '55–70%', '70%+'], he: ['Below −20%', '−20% to 0', '0 to +20%', '+20% to +40%', '+40% or more'],
   odds: ['Under 1.50', '1.50–1.79', '1.80–1.99', '2.00–2.49', '2.50–3.49', '3.50+'], edge: ['Below 0%', '0–5%', '5–10%', '10–15%', '15–20%', '20%+'],
   model: ['Under 40%', '40–50%', '50–60%', '60–70%', '70%+'], gap: ['Against you', '0–10% your way', '10–20% your way', '20%+ your way'],
-  when: ['Under 1h', '1–3h', '3–8h', '8–24h', '24h+'], units: ['Under 0.5u', '0.5–1u', '1–2u', '2u+'],
+  when: ['Under 1h', '1–3h', '3–8h', '8–24h', '24h+'], stake: ['Smallest third of your stakes', 'Middle third', 'Biggest third'],
 };
+// stakes are set by confidence, so "stake size" is relative to your own: thirds of every settled bet's stake
+let STAKE_CUTS = null;
+function setStakeCuts() {
+  const s = BETS.filter(b => b.status !== 'Pending' && b.stake > 0).map(b => b.stake).sort((a, b) => a - b);
+  const q = p => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+  STAKE_CUTS = s.length >= 6 && s[0] < s[s.length - 1] ? [q(1 / 3), q(2 / 3)] : null;
+  if (STAKE_CUTS && STAKE_CUTS[0] === STAKE_CUTS[1]) STAKE_CUTS = [STAKE_CUTS[0], STAKE_CUTS[0] + 1e-9];
+}
 const DIMS = [
   { k: 'side', g: 'Your bet', label: 'Over / under', f: it => it.l.side === 'over' ? 'Over' : 'Under', o: ['Over', 'Under'] },
   { k: 'stat', g: 'Your bet', label: 'Market', f: it => STAT[it.l.stat].label, o: [...PROP_MKTS.map(m => STAT[m[0]].label), 'Turnovers'] },
@@ -2097,9 +2091,7 @@ const DIMS = [
   { k: 'book', g: 'Your bet', label: 'Bookie', f: it => it.b.platform || 'Unknown' },
   { k: 'odds', g: 'Your bet', label: 'Odds', f: it => band(it.odds, [1.5, 1.8, 2, 2.5, 3.5], B.odds), o: B.odds },
   { k: 'when', g: 'Your bet', label: 'Placed before tip', f: it => band((Date.parse(it.l.tip_iso) - Date.parse(it.b.placedAt)) / 3600e3, [1, 3, 8, 24], B.when), o: B.when },
-  { k: 'kelly', g: 'Your bet', label: 'Stake vs Kelly', f: it => { const b = it.b; if (!it.single) return 'Multi (no Kelly)'; if (b.kelly == null) return null; if (!b.kelly) return 'Kelly said no bet';
-      const r = (betUnits(b) || 0) / b.kelly; return r < 0.75 ? 'Under Kelly' : r <= 1.33 ? 'About Kelly' : 'Over Kelly'; }, o: ['Under Kelly', 'About Kelly', 'Over Kelly', 'Kelly said no bet', 'Multi (no Kelly)'] },
-  { k: 'units', g: 'Your bet', label: 'Stake size', f: it => band(betUnits(it.b), [0.5, 1, 2], B.units), o: B.units },
+  { k: 'stake', g: 'Your bet', label: 'Stake size (your confidence)', f: it => STAKE_CUTS ? band(it.b.stake, STAKE_CUTS, B.stake) : null, o: B.stake },
   { k: 'wday', g: 'Your bet', label: 'Day of the week', f: it => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(it.t).getDay()], o: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
   { k: 'week', g: 'Your bet', label: 'Week', f: it => 'Week of ' + weekOf(it.t).toLocaleDateString([], { day: 'numeric', month: 'short' }), sk: it => weekOf(it.t).getTime(), time: true },
   { k: 'month', g: 'Your bet', label: 'Month', f: it => new Date(it.t).toLocaleDateString([], { month: 'short', year: 'numeric' }), sk: it => { const d = new Date(it.t); return d.getFullYear() * 12 + d.getMonth(); }, time: true },
@@ -2188,16 +2180,16 @@ function scanLeaks(items, how, minN) {
 const zWord = z => Math.abs(z) >= 3 ? 'strong' : Math.abs(z) >= 2 ? 'worth watching' : 'could easily be luck';
 // one row per leg, every saved number, for a spreadsheet
 function legsCSV() {
-  const cols = ['placed', 'tip', 'bet_id', 'legs_in_bet', 'player', 'pos', 'team', 'opp', 'home', 'stat', 'side', 'line', 'leg_odds', 'book_leg', 'odds_taken', 'stake', 'unit_size',
-    'bookie', 'leg_status', 'bet_status', 'actual', 'min_played', 'bet_profit', 'model', 'push', 'edge_leg', 'edge_bet', 'kelly_u', 'proj', 'season_avg', 'proj_min', 'avg_min', 'l10_min', 'starter_rate',
+  const cols = ['placed', 'tip', 'bet_id', 'legs_in_bet', 'player', 'pos', 'team', 'opp', 'home', 'stat', 'side', 'line', 'leg_odds', 'book_leg', 'odds_taken', 'stake',
+    'bookie', 'leg_status', 'bet_status', 'actual', 'min_played', 'bet_profit', 'model', 'push', 'edge_leg', 'edge_bet', 'proj', 'season_avg', 'proj_min', 'avg_min', 'l10_min', 'starter_rate',
     'injury', 'play_prob', 'matchup', 'rank_season', 'rank_l10', 'rank_effect', 'home_margin', 'total', 'blowout20', 'rest', 'b2b',
     ...HIT_WIN.flatMap(([w]) => [w + '_hits', w + '_games', w + '_push', w + '_avg', w + '_edge']), 'note'];
   const q = v => v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
   const rows = [];
   for (const b of BETS) for (const l of b.legs) {
     const o = legOdds(l, b), r = l.ranks || {};
-    rows.push([b.placedAt, l.tip_iso, b.id, b.legs.length, l.name, l.pos, l.team, l.opp, l.home ? 1 : 0, l.stat, l.side, l.line, l.odds, l.book, b.oddsTaken, b.stake, b.unitSize,
-      b.platform, l.status, b.status, l.actual, l.min_played, b.profit, l.model, l.push, l.edge, b.edge, b.kelly, l.proj, l.avg, l.min, l.avg_min, l.l10_min, l.start,
+    rows.push([b.placedAt, l.tip_iso, b.id, b.legs.length, l.name, l.pos, l.team, l.opp, l.home ? 1 : 0, l.stat, l.side, l.line, l.odds, l.book, b.oddsTaken, b.stake,
+      b.platform, l.status, b.status, l.actual, l.min_played, b.profit, l.model, l.push, l.edge, b.edge, l.proj, l.avg, l.min, l.avg_min, l.l10_min, l.start,
       l.inj, l.p, l.matchup, r.season ?? (l.rank && l.rank.basis === 'season' ? l.rank.rank : null), r.l10, r.effect, l.margin, l.total, l.blowout, l.rest, l.b2b == null ? null : l.b2b ? 1 : 0,
       ...HIT_WIN.flatMap(([w]) => { const x = l.hits && l.hits[w], e = hitEdge(x, o); return x ? [x.h, x.n, x.p, x.avg, e == null ? null : +e.toFixed(4)] : [null, null, null, null, null]; }), b.note].map(q).join(','));
   }
@@ -2211,7 +2203,7 @@ function profitChart(settled) {
   const x = i => L + (W - L - R) * (series.length > 1 ? i / (series.length - 1) : 0), y = v => T + (H - T - B) * (1 - (v - lo) / span);
   const step = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000].find(s => span / s <= 5) || 10000;
   let grid = '';
-  for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) grid += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${TRK.mode === 'units' ? +t.toFixed(2) + 'u' : (t < 0 ? '−$' : '$') + Math.abs(t)}</text>`;
+  for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) grid += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${(t < 0 ? '−$' : '$') + Math.abs(t)}</text>`;
   const col = cum >= 0 ? 'var(--good)' : 'var(--bad)';
   const path = series.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
   return `<div class="pchart" id="pchart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative profit over ${settled.length} settled bets, now ${fmtPL(cum)}">
@@ -2228,7 +2220,7 @@ function renderAnalytics(el) {
   const dollarsSt = settled.reduce((t, b) => t + b.stake, 0), dollarsPL = settled.reduce((t, b) => t + b.profit, 0);
   const singles = graded.filter(b => b.legs.length === 1 && b.model != null);
   const exp = singles.reduce((t, b) => t + b.model, 0), got = singles.filter(b => b.status === 'Won').length;
-  const fmtSt = v => TRK.mode === 'units' ? v.toFixed(2) + 'u' : fmtMoney(v);
+  const fmtSt = fmtMoney;
   let tiles = [['Settled bets', settled.length + (settled.length > graded.length ? ` (${settled.length - graded.length} void)` : '')], ['Win rate', graded.length ? pct(won / graded.length) : '–'],
     ['Total staked', fmtSt(staked)], ['Net P/L', fmtPL(pl), plCls(pl)], ['ROI', dollarsSt > 0 ? sgn(100 * dollarsPL / dollarsSt, 1) + '%' : '–', plCls(dollarsPL)],
     ['Model expected', singles.length ? `${exp.toFixed(1)} wins` : '–', '', singles.length ? `of ${singles.length} singles · you won ${got}` : 'singles only']];
@@ -2243,6 +2235,7 @@ function renderAnalytics(el) {
       ['Current streak', type ? `${streak} ${type === 'Won' ? 'W' : 'L'}` : '–', type === 'Won' ? 'up' : type === 'Lost' ? 'down' : ''], ['Avg legs per bet', (settled.reduce((t, b) => t + b.legs.length, 0) / settled.length).toFixed(1)]]);
   }
   // ---- legs: leaks finder + explorer ----
+  setStakeCuts();
   const how = TRK.ahow === 'real' ? 'real' : 'flat';
   const since = TRK.aper === 'all' ? 0 : Date.now() - (+TRK.aper) * 864e5;
   const base = anaItems().filter(it => (TRK.ascope !== 'singles' || it.single) && (!since || it.t >= since));
@@ -2256,7 +2249,7 @@ function renderAnalytics(el) {
   let rows = groupBy(items, ds, how).filter(r => r.items.length >= (+TRK.amin || 1));
   const S = TRK.asort, dir = TRK.adir === 1 ? 1 : -1;
   if (S) rows.sort((a, b) => { const x = a.a[S], y = b.a[S]; return x == null ? 1 : y == null ? -1 : dir * (x - y); });
-  const plTxt = v => v == null ? '–' : how === 'flat' ? (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + 'u' : fmtPL(v);
+  const plTxt = fmtPL;
   const big = z => z != null && Math.abs(z) >= 2;
   const cells = a => `<td class="n">${a.n}</td><td class="n">${pct(a.hit)}</td><td class="n">${pct(a.mp)}</td>
     <td class="n ${a.vs == null ? '' : plCls(a.vs)}${big(a.zm) ? ' flag' : ''}">${a.vs == null ? '–' : sgn(100 * a.vs, 0) + ' pts'}</td>
@@ -2291,8 +2284,8 @@ function renderAnalytics(el) {
   el.innerHTML = `<div class="bar" style="margin-bottom:10px"><label class="small"><input type="checkbox" id="tadv" ${TRK.adv ? 'checked' : ''}> More stats</label></div>
     <div class="tiles">${tiles.map(([l, v, c, d]) => `<div class="tile"><div class="l">${esc(l)}</div><div class="v ${c || ''}" style="font-size:22px">${esc(v)}</div>${d ? `<div class="d">${esc(d)}</div>` : ''}</div>`).join('')}</div>
     <h3 class="h2" style="margin-top:14px">Profit over time</h3>${profitChart(settled)}
-    <p class="note">Cumulative ${TRK.mode === 'units' ? 'units' : 'dollars'} over settled bets, in game order. Tap a point for the bet. Model expected = the model's chances added up at the time you bet - if you win clearly more or fewer than that over 100+ bets, the projections are off.</p>
-    <div class="bar" style="margin:16px 0 8px"><span class="lab">Count</span>${seg('ahow', [['flat', '1u per leg'], ['real', 'Your stakes']], how)}
+    <p class="note">Cumulative dollars over settled bets, in game order. Tap a point for the bet. Model expected = the model's chances added up at the time you bet - if you win clearly more or fewer than that over 100+ bets, the projections are off.</p>
+    <div class="bar" style="margin:16px 0 8px"><span class="lab">Count</span>${seg('ahow', [['flat', '$1 on every leg'], ['real', 'Your stakes']], how)}
       <select class="sel" id="ascope" aria-label="Which bets"><option value="all"${TRK.ascope !== 'singles' ? ' selected' : ''}>Singles + multi legs</option><option value="singles"${TRK.ascope === 'singles' ? ' selected' : ''}>Singles only</option></select>
       <select class="sel" id="aper" aria-label="Period">${[['all', 'All time'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days']].map(([k, l]) => `<option value="${k}"${String(TRK.aper) === k ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="bar" style="margin-bottom:6px"><span class="lab">Only</span><select class="sel" id="afd" aria-label="Filter on">${dimOpts(TRK.afd)}</select>
@@ -2309,7 +2302,8 @@ function renderAnalytics(el) {
       ${rows.map(rowHTML).join('') || '<tr><td colspan="10" class="small">No settled legs match.</td></tr>'}</tbody></table></div>
     <p class="note">Tap a column to sort, a row to see its legs. <b>Legs</b>: settled legs (each leg of a multi counts on its own). <b>Hit %</b> leaves out voids and pushes.
       <b>Model %</b>: the model's chance when you bet. <b>vs model</b>: how much more or less often you hit than it said; bold once it's 2+ luck-widths out, the sign the model is off in that spot.
-      <b>1u per leg</b> scores every leg as a 1-unit single at its own price (judges the picks, not the staking); <b>Your stakes</b> uses your real money, a multi's stake and profit split evenly over its legs.
+      <b>$1 on every leg</b> scores every leg as a $1 single at its own price (judges the picks, not how much you put on); <b>Your stakes</b> uses your real money, a multi's stake and profit split evenly over its legs.
+      <b>Stake size</b> splits your bets into thirds by how much you put on, so it shows whether your confidence picks the winners.
       <b>z</b>: profit in luck-widths from break-even; ±2 happens by chance about 1 time in 20. <b>Hit-rate edge</b> = hit rate × your odds − 1. Factors are saved when a bet goes on the slip; bets from before a factor existed show as “Not recorded”.</p>
     <div class="bar" style="margin-top:8px"><button class="btn sm ghost" type="button" id="acsv">Download every leg (CSV)</button><span class="small">all ${BETS.reduce((t, b) => t + b.legs.length, 0)} legs with every saved number, for a spreadsheet</span></div>`;
   $('#tadv').onchange = e => { TRK.adv = e.target.checked; saveTrk(); renderTrk(); };
@@ -2350,13 +2344,13 @@ function renderTrk() {
 function showBets() {
   view.innerHTML = `<section class="panel" id="syncbox"></section>
     <section class="panel"><h2>Bet tracker</h2>
-      <div class="bar" style="margin-bottom:12px">${seg('trkSub', [['bets', 'Bets'], ['analytics', 'Analytics']], TRK.sub === 'analytics' ? 'analytics' : 'bets')}${seg('trkMode', [['money', 'Money'], ['units', 'Units']], TRK.mode)}</div>
+      <div class="bar" style="margin-bottom:12px">${seg('trkSub', [['bets', 'Bets'], ['analytics', 'Analytics']], TRK.sub === 'analytics' ? 'analytics' : 'bets')}</div>
       <div id="trk"></div>
-      <p class="note">Bets grade themselves: from ESPN's box score a couple of hours after tip-off once the game is final, or from the box scores the model publishes each run. A player who doesn't take the court is void (stake back), and so is a whole-number line hit exactly. Units = stake ÷ your unit size when you placed it.</p></section>
+      <p class="note">Bets grade themselves: from ESPN's box score a couple of hours after tip-off once the game is final, or from the box scores the model publishes each run. A player who doesn't take the court is void (stake back), and so is a whole-number line hit exactly.</p></section>
     <section class="panel"><h2>Backup</h2><p class="note" style="margin:0 0 8px">Your bets are kept on this device, and in your account too once you sign in above. A copied backup is still a good idea now and then (Notes, email to yourself); restoring adds any bets you don't already have.</p>
       <div class="bar"><button class="btn sm ghost" type="button" id="bkcopy">Copy backup</button><button class="btn sm ghost" type="button" id="bkfile">Download file</button><button class="btn sm ghost" type="button" id="bkopen">Restore…</button></div>
       <div id="bkrest" hidden style="margin-top:8px"><textarea class="einp" id="bktext" rows="4" style="width:100%" placeholder="Paste a backup here"></textarea><div class="bar" style="margin-top:6px"><button class="btn sm" type="button" id="bkgo">Restore</button><span class="small" id="bkmsg"></span></div></div></section>`;
-  onSeg(view, (k, v) => { if (k === 'trkSub') TRK.sub = v; if (k === 'trkMode') TRK.mode = v; saveTrk(); EDIT_ID = null; showBets(); });
+  onSeg(view, (k, v) => { if (k === 'trkSub') TRK.sub = v; saveTrk(); EDIT_ID = null; showBets(); });
   const backup = () => JSON.stringify({ app: 'lineboard-nba-bets', v: 1, at: new Date().toISOString(), bets: BETS });
   $('#bkcopy').onclick = async () => { try { await navigator.clipboard.writeText(backup()); toast(`Copied ${BETS.length} bet${BETS.length === 1 ? '' : 's'}.`); } catch (e) { toast('The phone didn\'t allow copying. Use Download file instead.'); } };
   $('#bkfile').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([backup()], { type: 'application/json' })); a.download = `nba-bets-${new Date().toISOString().slice(0, 10)}.json`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
