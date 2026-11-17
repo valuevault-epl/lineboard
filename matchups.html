@@ -270,6 +270,12 @@ details.more summary { cursor: pointer; font-size: 12.5px; color: var(--muted); 
 .pchart .ln { fill: none; stroke-width: 2; }
 .pchart circle { stroke: var(--surface); stroke-width: 2; cursor: pointer; }
 .hitrow { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prebtn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); border-radius: 999px; min-height: 36px; padding: 6px 14px; font: 700 14px/1 var(--mono); cursor: pointer; }
+.prebtn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.preinp { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 2px 4px 2px 10px; font: 700 14px var(--mono); }
+.preinp input { width: 64px; border: 0; background: transparent; color: var(--ink); font: inherit; padding: 4px 2px; }
+.preinp button { border: 0; background: none; color: var(--muted); font-size: 17px; line-height: 1; cursor: pointer; padding: 2px 6px; }
 .atable th[data-sort] { cursor: pointer; user-select: none; }
 .atable th[data-sort]:hover, .atable th.sorted { color: var(--ink); }
 .atable th.sorted::after { content: attr(data-dir); margin-left: 3px; }
@@ -1630,7 +1636,7 @@ const loadLS = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) ||
 const saveLS = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
 let BETS = loadLS(BET_KEY, []);
 let SLIP = loadLS(SLIP_KEY, []);
-const TRK = Object.assign({ hide: {}, day: 'all', status: 'all', sub: 'bets', adv: false,
+const TRK = Object.assign({ presets: [5, 10, 20, 50], hide: {}, day: 'all', status: 'all', sub: 'bets', adv: false,
   ag1: 'edge', ag2: '', ahow: 'flat', ascope: 'all', aper: 'all', amin: 1, asort: '', adir: -1, aflt: [], afd: 'side', aopen: '', lmin: 15 }, loadLS(TRK_KEY, {}));
 const saveBets = () => { if (!saveLS(BET_KEY, BETS)) toast('This phone wouldn\'t save your bets (storage full or private browsing).'); scheduleSync(); };
 const saveSlip = () => saveLS(SLIP_KEY, SLIP), saveTrk = () => saveLS(TRK_KEY, TRK);
@@ -1722,7 +1728,15 @@ function addToSlip(spec) {
 }
 const inSlip = (gid, pid, stat, side, line) => SLIP.some(l => l.id === [gid, pid, stat, side, line].join('|'));
 
-// no stake suggestion or unit sizes here: the user stakes by confidence (17 Nov 2026), in dollars
+// no stake suggestion or unit sizes here: the user stakes by confidence (17 Nov 2026), in dollars, with quick-stake
+// buttons they set themselves (TRK.presets)
+let PRE_EDIT = false;
+const amt = v => Number.isInteger(+v) ? String(+v) : (+v).toFixed(2);
+function tidyPresets() {
+  const p = [...new Set((TRK.presets || []).map(Number).filter(v => v > 0).map(round2))].sort((a, b) => a - b).slice(0, 8);
+  TRK.presets = p.length ? p : [5, 10, 20, 50];
+  saveTrk();
+}
 function slipChance() {                      // the model's chance the whole slip wins; null for same-game multis
   if (!SLIP.length || SLIP.some(l => l.model == null)) return null;
   if (new Set(SLIP.map(l => l.gid)).size < SLIP.length) return null;          // same-game legs move together
@@ -1733,6 +1747,7 @@ function openSlip(open) {
   SLIP_OPEN = open;
   $('#slip').hidden = $('#slipback').hidden = !open;
   $('#slipfab').setAttribute('aria-expanded', String(open));
+  if (!open && PRE_EDIT) { PRE_EDIT = false; tidyPresets(); }
   if (open) { SLIP_FORM = null; renderSlip(); }
 }
 function renderSlip() {
@@ -1754,6 +1769,10 @@ function renderSlip() {
     ${SLIP.length ? `<div class="form">
       <div class="frow"><label>Odds taken<input id="sodds" type="number" inputmode="decimal" step="0.01" min="1.01" value="${esc(f.odds)}" placeholder="1.90"></label>
         <label>Stake ($)<input id="sstake" type="number" inputmode="decimal" step="0.5" min="0" value="${esc(f.stake)}" placeholder="10"></label></div>
+      <div class="presets" role="group" aria-label="Quick stakes">${PRE_EDIT
+        ? TRK.presets.map((v, i) => `<span class="preinp">$<input type="number" inputmode="decimal" step="0.5" min="0.5" value="${v}" data-pi="${i}" aria-label="Quick stake ${i + 1}"><button type="button" data-prm="${i}" aria-label="Remove $${amt(v)}">×</button></span>`).join('')
+          + (TRK.presets.length < 8 ? '<button type="button" class="linkbtn" id="preadd">+ Add</button>' : '') + '<button type="button" class="btn sm" id="predone">Done</button>'
+        : TRK.presets.map(v => `<button type="button" class="prebtn${+f.stake === v ? ' on' : ''}" data-pre="${v}">$${amt(v)}</button>`).join('') + '<button type="button" class="linkbtn" id="preedit">Edit</button>'}</div>
       <p class="note" style="margin:0">${SLIP.length > 1 ? `${SLIP.length}-leg ${new Set(SLIP.map(l => l.gid)).size < SLIP.length ? 'same-game multi' : 'multi'}: legs multiply to ${prodOdds.toFixed(2)}; put in the price the bookie actually gave you. ` : ''}${
         ch ? `Model ${pct(ch.win, 1)}${odds > 1 ? ` → edge <b class="${plCls(ev)}">${sgn(100 * ev, 1)}%</b>` : ''}.`
         : SLIP.length > 1 ? 'No combined model chance for same-game legs: they win and lose together, so multiplying their chances would overstate it.' : ''}</p>
@@ -1767,7 +1786,14 @@ function renderSlip() {
   if (!SLIP.length) return;
   const keepF = () => { f.odds = $('#sodds').value; f.stake = $('#sstake').value; f.platform = $('#splat').value; f.other = $('#sother').value; f.note = $('#snote').value; };
   $('#sodds').addEventListener('change', () => { keepF(); renderSlip(); });
-  $('#sstake').addEventListener('input', keepF);
+  $('#sstake').addEventListener('input', () => { keepF(); $$('[data-pre]', el).forEach(b => b.classList.toggle('on', +b.dataset.pre === +f.stake && f.stake !== '')); });
+  // quick stakes: tap to fill the stake; Edit to change, add or remove them (saved on this device)
+  $$('[data-pre]', el).forEach(b => b.onclick = () => { keepF(); f.stake = String(+b.dataset.pre); renderSlip(); });
+  if ($('#preedit')) $('#preedit').onclick = () => { keepF(); PRE_EDIT = true; renderSlip(); };
+  $$('[data-pi]', el).forEach(inp => inp.addEventListener('input', () => { const v = parseFloat(inp.value); if (v > 0) { TRK.presets[+inp.dataset.pi] = round2(v); saveTrk(); } }));
+  $$('[data-prm]', el).forEach(b => b.onclick = () => { keepF(); TRK.presets.splice(+b.dataset.prm, 1); saveTrk(); renderSlip(); });
+  if ($('#preadd')) $('#preadd').onclick = () => { keepF(); const last = TRK.presets[TRK.presets.length - 1]; TRK.presets.push(last ? last * 2 : 10); saveTrk(); renderSlip(); const ins = $$('[data-pi]', el); if (ins.length) ins[ins.length - 1].select(); };
+  if ($('#predone')) $('#predone').onclick = () => { keepF(); PRE_EDIT = false; tidyPresets(); renderSlip(); };
   $('#splat').addEventListener('change', () => { keepF(); $('#sotherl').hidden = f.platform !== 'Other'; });
   ['#sother', '#snote'].forEach(s => $(s).addEventListener('input', keepF));
   $('#splace').onclick = async () => {
