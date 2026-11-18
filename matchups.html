@@ -368,10 +368,13 @@ const PREF_KEY = 'lineboard:mu:prefs';
 const prefs = Object.assign({ win: 'season', measure: 'raw', more: false, stat: 'pts', sample: 'l20', alt: false, scn: 'proj',
   venue: 'all', script: 'all', lbSide: 'def', lbStat: 'pts', lbPos: 'PG', lbWin: 'season', lbMeasure: 'raw', lbDir: 'desc',
   lbTeamSort: 'pace', spotStat: 'pts', spotKey: 'boost', spotDir: 'top', spotDay: 'all', spotGame: 'all',
-  propPick: [], propMk: ['pts', 'reb', 'ast', 'tpm'], propAlt: false, propView: 'value', propEdge: 5, propRank: 'any',
+  propPick: [], propMk: ['pts', 'reb', 'ast', 'tpm'], propAlt: false, propView: 'value', propEdge: 5, propRank: 'any', propGap: null,
   propBasis: 'season', propStat: 'all', propSide: 'all', propGame: 'all' }, (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch (e) { return {}; } })());
 const save = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) {} };
 if (prefs.v !== 2) { prefs.measure = 'tonight'; prefs.lbSide = 'tonight'; prefs.v = 2; save(); }
+// Props "value only": how far the projection must be past the line, in the stat's own units (user's rule, 19 Nov 2026)
+const GAP_KEYS = [['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['tpm', '3PM'], ['other', 'Others']];
+prefs.propGap = Object.assign({ pts: 0.3, reb: 0.3, ast: 0.3, tpm: 0.2, other: 0 }, prefs.propGap || {});
 
 let IDX = null;
 const TEAMFILES = {};
@@ -1523,7 +1526,19 @@ function showProps() {
   if (prefs.propStat !== 'all' && !statsHere.includes(prefs.propStat)) prefs.propStat = 'all';
   const rankOk = o => prefs.propRank === 'ends' ? isTop8(o.R) || isBottom8(o.R)
     : prefs.propRank === 'with' ? (o.side === 'over' && isTop8(o.R)) || (o.side === 'under' && isBottom8(o.R)) : true;
-  const rows = list.map(o => ({ ...o, R: concedeRank(o.ge.opp, o.pl.pos, o.stat, prefs.propBasis) }))
+  // projection past the line (over: proj - line, under: line - proj), on the projection as shown (1 decimal). In
+  // "value only" a price whose line is too close to the projection is skipped and the best one that passes is shown.
+  const gapMin = stat => +(prefs.propGap[GAP_KEYS.some(g => g[0] === stat) ? stat : 'other']) || 0;
+  const gapOf = (o, point) => { const mu = +(+o.mu).toFixed(1); return round2(o.side === 'over' ? mu - point : point - mu); };   // as fmt() shows it
+  const useGap = prefs.propView === 'value';
+  const rows = list.map(o => {
+    if (!useGap) return o;
+    const ok = o.quotes.filter(q => gapOf(o, q.point) >= gapMin(o.stat) - 1e-9);          // quotes are best return first
+    if (!ok.length) return null;
+    if (ok[0] === o.best) return o;
+    const best = ok[0];
+    return { ...o, best, backup: MAIN_BOOKS.includes(best.book) ? null : ok.find(q => MAIN_BOOKS.includes(q.book)) || null };
+  }).filter(Boolean).map(o => ({ ...o, R: concedeRank(o.ge.opp, o.pl.pos, o.stat, prefs.propBasis) }))
     .filter(o => (prefs.propView === 'all' || o.best.ev >= edge) && (prefs.propStat === 'all' || o.stat === prefs.propStat) &&
       (prefs.propSide === 'all' || o.side === prefs.propSide) && (prefs.propGame === 'all' || o.gid === prefs.propGame) && rankOk(o))
     .sort((a, b) => b.best.ev - a.best.ev);
@@ -1534,6 +1549,7 @@ function showProps() {
     : `<section class="panel"><h2>Prop value · prices from ${esc(whenTxt(Math.min(...times)))}${Math.max(...times) - Math.min(...times) > 600e3 ? '–' + esc(whenTxt(Math.max(...times))) : ''}</h2>
     <div class="bar" style="margin-bottom:8px"><span class="lab">Show</span>${seg('propView', [['value', 'Value only'], ['all', 'Every line']], prefs.propView)}
       <label class="small">Min edge <input class="inp" id="propEdge" type="number" inputmode="decimal" step="0.5" min="0" max="50" value="${esc(prefs.propEdge)}" style="width:64px"> %</label></div>
+    ${useGap ? `<div class="bar" style="margin-bottom:8px"><span class="lab">Proj past the line</span>${GAP_KEYS.map(([k, l]) => `<label class="small">${l} <input class="inp" data-gap="${k}" type="number" inputmode="decimal" step="0.1" min="0" max="20" value="${esc(prefs.propGap[k])}" style="width:68px"></label>`).join('')}</div>` : ''}
     <div class="bar" style="margin-bottom:8px"><span class="lab">Opponent</span>${seg('propRank', [['any', 'Any'], ['ends', 'Top 8 or bottom 8'], ['with', 'Overs vs top 8 · unders vs bottom 8']], prefs.propRank)}
       <select class="sel" id="propBasis" aria-label="Rank teams on">${RANK_BASIS.map(([k, l]) => `<option value="${k}"${k === prefs.propBasis ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
     <div class="bar" style="margin-bottom:8px"><span class="lab">Stat</span>${seg('propStat', [['all', 'All'], ...statsHere.map(s => [s, STAT[s].short])], prefs.propStat)}
@@ -1549,13 +1565,14 @@ function showProps() {
         <td class="n" style="${heatP(b.prob.win)}">${pct(b.prob.win)}<span class="sub">fair ${fmt(fair, 2)}</span></td>
         <td class="n">${evTxt(b.ev)}</td>
         <td class="n" style="${o.R ? heatRank(o.R.rank, o.R.of) : ''}">${o.R ? ord(o.R.rank) : '–'}<span class="sub">${esc(rankSub(o.R))}</span></td>
-        <td class="n">${fmt(o.mu)}<span class="sub">avg ${fmt(seasonAvg(o.pl, o.stat))}</span></td>
+        <td class="n">${fmt(o.mu)}<span class="sub">${sgn(gapOf(o, b.point), 1)} past line</span><span class="sub">avg ${fmt(seasonAvg(o.pl, o.stat))}</span></td>
         <td class="n" data-hit="${tok}-${i}"><span class="small">…</span></td>
         <td><button class="addbtn" type="button" data-add="${i}" data-key="${esc([o.gid, o.pid, o.stat, o.side, b.point].join('|'))}" aria-label="Add ${esc(o.pl.name)} ${o.side} ${lineTxt(b.point)} to the slip">+</button></td></tr>`;
-    }).join('') || `<tr><td colspan="9" class="small">Nothing matches these filters${prefs.propView === 'value' ? ` at a ${+(edge * 100).toFixed(1)}%+ edge` : ''}.</td></tr>`}
+    }).join('') || `<tr><td colspan="9" class="small">Nothing matches these filters${prefs.propView === 'value' ? ` at a ${+(edge * 100).toFixed(1)}%+ edge with the projection that far past the line` : ''}.</td></tr>`}
     </tbody></table></div>
     ${rows.length > shown.length ? `<p class="note">Showing the top ${shown.length} of ${rows.length}.</p>` : ''}
-    <p class="note"><b>Edge</b> = the model's expected return at the best price (Betfair after commission); <b>value only</b> shows edges at or above your minimum. Model = chance from tonight's projection (the same numbers as the player pages, projected game script), assuming he plays, because bets are void if he doesn't take the court. Main lines: each bookie's own line competes and the best return is shown, with the other books under the bet; “or SB …” is the best at Sportsbet/TAB/Betfair when the top price is elsewhere.</p>
+    <p class="note"><b>Edge</b> = the model's expected return at the best price (Betfair after commission); <b>value only</b> shows edges at or above your minimum.
+      <b>Proj past the line</b> = how far tonight's projection is beyond the line in your bet's direction (over: projection − line; under: line − projection), in points, rebounds and so on; value only also needs at least your minimum for that stat (Others = PRA, the other combos, steals and blocks). If the best price's line is too close, the best price that passes is shown instead. Model = chance from tonight's projection (the same numbers as the player pages, projected game script), assuming he plays, because bets are void if he doesn't take the court. Main lines: each bookie's own line competes and the best return is shown, with the other books under the bet; “or SB …” is the best at Sportsbet/TAB/Betfair when the top price is elsewhere.</p>
     <p class="note"><b>Opp rank</b> = where tonight's opponent ranks among all 30 teams for conceding that stat to his position (1st = gives up the most, as on Leaderboards › Conceded). <b>Top 8</b> suits overs, <b>bottom 8</b> unders. Per-position defence numbers are mostly noise this early in a season, and the model % already includes the (shrunk) matchup effect, so the rank filter narrows the list; it doesn't add edge on its own.</p>
     <p class="note">The projections have been checked against real box scores, never against bookie prop prices (there's no price history), so treat edges as a shortlist rather than proven value. Edges of 15%+ usually mean the bookie knows something the model doesn't (a minutes limit, a role change, late injury news) - check the news before betting.${unmatched.length ? ` Not matched to a player on the slate: ${esc(unmatched.slice(0, 8).join(', '))}${unmatched.length > 8 ? ` and ${unmatched.length - 8} more` : ''}.` : ''}</p>
   </section>`;
@@ -1580,6 +1597,10 @@ function showProps() {
   onSeg(view, (k, v) => { prefs[k] = v; save(); showProps(); });
   $('#propEdge').addEventListener('change', e => { const v = parseFloat(e.target.value); if (isFinite(v) && v >= 0 && v <= 50) { prefs.propEdge = v; save(); const y = window.scrollY; showProps(); window.scrollTo(0, y); } });
   $('#propBasis').addEventListener('change', e => { prefs.propBasis = e.target.value; save(); const y = window.scrollY; showProps(); window.scrollTo(0, y); });
+  $$('[data-gap]', view).forEach(inp => inp.addEventListener('change', () => {
+    const v = parseFloat(inp.value);
+    if (isFinite(v) && v >= 0 && v <= 20) { prefs.propGap[inp.dataset.gap] = Math.round(v * 100) / 100; save(); const y = window.scrollY; showProps(); window.scrollTo(0, y); }
+  }));
   $('#propGame').addEventListener('change', e => { prefs.propGame = e.target.value; save(); const y = window.scrollY; showProps(); window.scrollTo(0, y); });
   $$('tr[data-o]', view).forEach(tr => tr.addEventListener('click', () => openProp(shown[+tr.dataset.o])));
   $$('[data-add]', view).forEach(btn => btn.addEventListener('click', e => {
