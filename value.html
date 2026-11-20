@@ -143,7 +143,7 @@ details.settings summary { cursor: pointer; font-weight: 600; font-size: 13px; }
         <div class="small" id="keyinfo"></div>
         <label>GitHub refresh token
           <input id="ghtoken" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
-          <span class="small">With this, every tap also asks the spare laptop to re-run the models for the leagues you picked (latest injuries and news), and the value list updates by itself when the new numbers arrive, usually within a few minutes. A fine-grained token that can only write the lineboard-requests repo. Saved on this phone only.</span>
+          <span class="small">With this, every tap also asks for a fresh run of the models (the cloud does NBA; the spare laptop, when it's on, does every league) for the leagues you picked (latest injuries and news), and the value list updates by itself when the new numbers arrive, usually within a few minutes. A fine-grained token that can only write the lineboard-requests repo. Saved on this phone only.</span>
         </label>
         <label>Betfair commission (%)
           <input id="comm" class="num" type="number" min="0" max="15" step="0.5" inputmode="decimal">
@@ -384,8 +384,9 @@ async function loadData(token) {
 }
 const loadPredictions = async () => (await loadData()).leagues;
 
-// ---- asking the spare laptop to re-run the models ------------------------------------------------
-// The page writes refresh.json to the lineboard-requests repo with the phone's token. The laptop sees the new commit
+// ---- asking for a fresh run of the models (the cloud: NBA; the spare laptop when it's on: all) ------
+// The page writes refresh.json to the lineboard-requests repo with the phone's token. A GitHub Actions workflow there
+// (and the spare laptop, if it's on) sees the new commit
 // within ~20 seconds, re-runs those leagues and publishes; data.json then carries { request: { id, done, failed } }.
 async function askRefresh(lgs) {
   const token = ghNow();
@@ -415,7 +416,7 @@ async function waitForRefresh(w) {
   const names = w.lgs.map(k => LNAME[k]).join(', ');
   while (WAITING === w && Date.now() - w.at < REFRESH_WAIT) {
     const mins = Math.max(0, Math.round((Date.now() - w.at) / 60000));
-    refreshLine(`Asked the laptop to refresh ${names} for the latest injuries and news${mins ? ` (${mins} min so far)` : ''}. The value list updates by itself when the new numbers arrive - keep this page open.`);
+    refreshLine(`Asked for a refresh of ${names} for the latest injuries and news${mins ? ` (${mins} min so far)` : ''}. The value list updates by itself when the new numbers arrive - keep this page open.`);
     await new Promise(r => setTimeout(r, REFRESH_POLL));
     if (WAITING !== w) return;
     let d;
@@ -438,13 +439,13 @@ async function waitForRefresh(w) {
     const ok = w.lgs.filter(k => !failed.includes(k));
     refreshLine((ok.length ? `${ok.map(k => LNAME[k]).join(', ')} predictions refreshed at ${timeOf(Date.now())}` +
       (redo.length ? ', and the value list is worked out again with the same odds (no extra credits).' : '.') : '') +
-      (failed.length ? ` ${failed.map(k => `${LNAME[k]} couldn't refresh on the laptop, so its numbers are from ${genTime(LEAGUES[k]) || 'the last run'}.`).join(' ')}` : ''),
+      (failed.length ? ` ${failed.map(k => `${LNAME[k]} couldn't be refreshed (the cloud only runs NBA, and the spare laptop didn't answer), so its numbers are from ${genTime(LEAGUES[k]) || 'the last run'}.`).join(' ')}` : ''),
       failed.length ? 'err' : 'ok');
     return;
   }
   if (WAITING === w) {
     WAITING = null; mine.set('pending', null);
-    refreshLine(`The laptop didn't answer within ${REFRESH_WAIT / 60000} minutes (it may be asleep or off), so these are the predictions from its last run.`, 'err');
+    refreshLine(`Nothing answered the refresh within ${REFRESH_WAIT / 60000} minutes, so these are the predictions from the last run.`, 'err');
   }
 }
 
@@ -736,7 +737,7 @@ async function go() {
     const want = lgs.filter(lg => LEAGUES[lg] && upcoming(LEAGUES[lg]).length);
     let refresh = null;
     if (ghNow() && want.length) {
-      status.textContent = 'Asking the laptop to refresh the predictions…';
+      status.textContent = 'Asking for fresh predictions…';
       try {
         const id = await askRefresh(want);
         refresh = { id, lgs: want, before: Object.fromEntries(want.map(k => [k, LEAGUES[k].generated])), at: Date.now() };

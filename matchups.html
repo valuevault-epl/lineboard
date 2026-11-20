@@ -235,6 +235,9 @@ body { padding-bottom: 72px; }
 .einp { width: auto; padding: 5px 8px; font-size: 14px; }
 .btn.sm { padding: 7px 14px; font-size: 13px; }
 .btn.ghost { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
+.refbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: -4px 0 12px; }
+.refbar .small { margin: 0; }
+.refbar .ok { color: var(--good); } .refbar .err { color: var(--bad); }
 .addbtn { border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; min-width: 34px; height: 34px; font: 800 17px/1 var(--body); cursor: pointer; color: var(--ink); }
 .addbtn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .toast { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 50; display: flex; gap: 14px; align-items: center;
@@ -332,6 +335,7 @@ details.more summary { cursor: pointer; font-size: 12.5px; color: var(--muted); 
     <a href="#/bets" data-tab="bets">Bets</a>
   </nav>
   <p class="small" id="stamp"></p>
+  <div class="refbar"><button class="btn sm ghost" type="button" id="mref" hidden>↻ Refresh NBA now</button><span class="small" id="mrefmsg" role="status" aria-live="polite"></span></div>
   <main id="view"><p class="loading">Loading matchups…</p></main>
   <div class="tip" id="tip" role="tooltip" hidden></div>
 </div>
@@ -339,6 +343,7 @@ details.more summary { cursor: pointer; font-size: 12.5px; color: var(--muted); 
 <div class="backdrop" id="slipback" hidden></div>
 <section class="sheet" id="slip" role="dialog" aria-modal="true" aria-label="Bet slip" hidden></section>
 <div class="toast" id="toast" role="status" hidden></div>
+<script src="refresh.js"></script>
 <script id="main">
 'use strict';
 // ------------------------------------------------------------------------------------------------
@@ -2746,13 +2751,69 @@ function start(d) {
   $('#stamp').textContent = `Updated ${d.generated} (Melbourne) · ${d.games.length} games · positions from Basketball-Reference`;
   route();
 }
+// ---- refresh the NBA model from the phone (refresh.js): ask, wait for the cloud or the laptop to publish, then
+// load the new numbers in place. The GitHub API has the new files seconds after the push; Pages can lag minutes.
+const MINDEX_API = 'https://api.github.com/repos/valuevault-epl/lineboard/contents/matchups/index.json?ref=main';
+async function freshIndex() {
+  const tok = window.LBRefresh.token(), h = { Accept: 'application/vnd.github.raw+json' };
+  if (tok) h.Authorization = 'Bearer ' + tok;
+  try { const r = await fetch(MINDEX_API, { cache: 'no-store', headers: h }); if (r.ok) return await r.json(); } catch (e) {}
+  const old = IDX.generated;
+  for (let i = 0; i < 18; i++) {                       // no API: wait for GitHub Pages (up to 3 minutes)
+    try { const d = await loadIndex(); if (d.generated !== old) return d; } catch (e) {}
+    await new Promise(r => setTimeout(r, 10e3));
+  }
+  return null;
+}
+const refMsg = (t, cls) => { const m = $('#mrefmsg'); m.textContent = t || ''; m.className = 'small' + (cls ? ' ' + cls : ''); };
+let REF_BUSY = false;
+async function runRefresh(resume) {
+  const R = window.LBRefresh;
+  if (!R || REF_BUSY) return;
+  if (!resume && !R.token()) {
+    $('#mrefmsg').className = 'small err';
+    $('#mrefmsg').innerHTML = 'Refreshing needs the GitHub refresh token on this phone. Add it on the <a href="value.html">odds page</a>, under Settings.';
+    return;
+  }
+  REF_BUSY = true; $('#mref').disabled = true;
+  const tick = m => refMsg(`Refreshing NBA, usually 2–4 minutes${m ? ` (${m} min so far)` : ''}. Keep using the page; the new numbers load by themselves.`);
+  try {
+    let res;
+    if (resume) res = await R.wait(resume, tick);
+    else {
+      tick(0);
+      let before = {};
+      try { const d0 = await R.data(); before = { nba: d0.leagues && d0.leagues.nba && d0.leagues.nba.generated }; } catch (e) {}
+      res = await R.start(['nba'], before, tick);
+    }
+    const was = IDX.generated;
+    if (!res) refMsg(`Nothing came back within ${R.MAX_WAIT / 60000} minutes, so these are still the numbers from ${was}. Try again in a bit.`, 'err');
+    else if (res.failed.includes('nba')) refMsg(`The refresh ran but the NBA model hit an error, so these are still the numbers from ${was}.`, 'err');
+    else {
+      refMsg('Loading the new numbers…');
+      const d = await freshIndex();
+      const at = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (d && d.generated !== was) {
+        for (const k of Object.keys(TEAMFILES)) delete TEAMFILES[k];
+        const y = window.scrollY; start(d); window.scrollTo(0, y);
+        refMsg(`NBA refreshed at ${at}: latest injuries, minutes and projections loaded.`, 'ok');
+      } else refMsg(d ? `NBA refreshed at ${at}: nothing changed since ${was}.` : 'NBA refreshed, but the new numbers haven\'t reached this page yet. Reopen it in a minute.', d ? 'ok' : 'err');
+    }
+  } catch (e) { refMsg(e.message || 'Couldn\'t refresh.', 'err'); }
+  finally { REF_BUSY = false; $('#mref').disabled = false; }
+}
+if (window.LBRefresh) { $('#mref').hidden = false; $('#mref').onclick = () => runRefresh(); }
 window.addEventListener('hashchange', route);
 $('#slipfab').addEventListener('click', () => openSlip(!SLIP_OPEN));
 $('#slipback').addEventListener('click', () => openSlip(false));
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && SLIP_OPEN) openSlip(false); });
 let resizeT;
 window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (location.hash.startsWith('#/p/')) route(); }, 250); });
-loadIndex().then(start).catch(e => {
+loadIndex().then(d => {
+  start(d);
+  const w = window.LBRefresh && window.LBRefresh.pending();     // a refresh asked before the app was closed
+  if (w && w.lgs.includes('nba')) runRefresh(w);
+}).catch(e => {
   view.innerHTML = `<div class="banner">Couldn't load the matchups (${esc(e.message)}). They are rebuilt every time the NBA model runs; check the connection and try again.</div>`;
 });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
