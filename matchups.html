@@ -248,6 +248,24 @@ body { padding-bottom: 72px; }
 .st.lost { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .st.pending { background: var(--accent-soft); color: var(--ink); border-color: transparent; }
 .st.prac { background: var(--warn-soft); color: var(--warn); border: 1px dashed var(--warn); }
+.lv { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; }
+.lv b { font-family: var(--mono); font-size: 14px; }
+.lvtag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--bad); }
+.lvtag::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.lvtag.fin { color: var(--muted); }
+.lvbar { position: relative; flex: 1 1 100%; height: 6px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
+.lvbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); }
+.lvbar.un i { background: var(--warn); }
+.lvbar.ov.past i { background: var(--good); } .lvbar.un.past i { background: var(--bad); }
+.lvbar s { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
+.pcount { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 0 0 8px; font-size: 14px; }
+.pcount b { font: 700 20px var(--mono); }
+.pcount .small { margin: 0; }
+.ghead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 8px 0 -2px; padding: 0 2px; }
+.ghead b { font: 800 15px/1.2 var(--display, var(--body)); letter-spacing: .02em; }
+.ghead .score { font: 600 13px var(--mono); }
+.ghead .small { margin: 0; }
+.st.live { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .betcard.prac { border-style: dashed; border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .pracsw { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); font-size: 14px; font-weight: 700; cursor: pointer; }
 .pracsw input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
@@ -1569,6 +1587,9 @@ function showProps() {
     <div class="bar" style="margin-bottom:8px"><span class="lab">Stat</span>${seg('propStat', [['all', 'All'], ...statsHere.map(s => [s, STAT[s].short])], prefs.propStat)}
       ${seg('propSide', [['all', 'Overs + unders'], ['over', 'Overs'], ['under', 'Unders']], prefs.propSide)}</div>
     <div class="bar" style="margin-bottom:12px"><span class="lab">Game</span><select class="sel" id="propGame" aria-label="Game" style="max-width:100%"><option value="all">All priced games</option>${gamesHere.map(id => gameById(id)).map(g => `<option value="${g.id}"${g.id === prefs.propGame ? ' selected' : ''}>${esc(g.away)} @ ${esc(g.home)} · ${esc(g.tip)}</option>`).join('')}</select></div>
+    <p class="pcount" role="status"><b>${rows.length}</b> bet${rows.length === 1 ? '' : 's'} match${rows.length === 1 ? 'es' : ''} these filters${rows.length ? `<span class="small">${
+      [['over', 'over'], ['under', 'under']].map(([k, l]) => { const n = rows.filter(o => o.side === k).length; return n ? `${n} ${l}${n > 1 ? 's' : ''}` : ''; }).filter(Boolean).join(', ')} · ${
+      [...new Set(rows.map(o => o.stat))].map(s => `${rows.filter(o => o.stat === s).length} ${STAT[s].short}`).join(', ')} · ${new Set(rows.map(o => o.pid)).size} player${new Set(rows.map(o => o.pid)).size === 1 ? '' : 's'} in ${new Set(rows.map(o => o.gid)).size} game${new Set(rows.map(o => o.gid)).size === 1 ? '' : 's'}${rows.length > shown.length ? ` · table shows the top ${shown.length}` : ''}</span>` : ''}</p>
     <div class="tw"><table class="props"><thead><tr><th>Player</th><th>Bet</th><th class="n">Price</th><th class="n">Model</th><th class="n">Edge</th><th class="n">Opp rank</th><th class="n">Proj</th><th class="n">Hit L20</th><th><span class="sr">Slip</span></th></tr></thead><tbody>
     ${shown.map((o, i) => {
       const b = o.best, fair = b.prob.win > 0 ? (1 - b.prob.push) / b.prob.win : null;
@@ -1897,15 +1918,18 @@ function boxFromResults(res, g) {
 }
 const ESPN_SUM = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=';
 const ESPN_BOX = {};
-async function espnBox(gid) {                // { final, p: { pid: {min, pts, ...} } } for a game results.json doesn't have yet
+// { final, state: pre|in|post, detail: '5:32 - 3rd', score: { home: {team, score}, away }, p: { pid: {min, pts, ...} } }
+async function espnBox(gid, maxAge = 3 * 60e3) {
   const c = ESPN_BOX[gid];
-  if (c && (c.final || Date.now() - c.at < 3 * 60e3)) return c;
+  if (c && (c.final || Date.now() - c.at < maxAge)) return c;
   try {
     const r = await fetch(ESPN_SUM + encodeURIComponent(gid), { cache: 'no-store' });
     if (!r.ok) return null;
     const d = await r.json();
-    const st = ((((d.header || {}).competitions || [])[0] || {}).status || {}).type || {};
-    const out = { at: Date.now(), final: !!st.completed, p: {} };
+    const comp = ((d.header || {}).competitions || [])[0] || {};
+    const st = (comp.status || {}).type || {}, score = {};
+    for (const t of comp.competitors || []) score[t.homeAway] = { team: (t.team || {}).abbreviation || '', score: t.score ?? '' };
+    const out = { at: Date.now(), final: !!st.completed, state: st.state || '', detail: st.shortDetail || st.detail || '', score, p: {} };
     for (const t of ((d.boxscore || {}).players || [])) for (const s of (t.statistics || []).slice(0, 1)) {
       const K = s.keys || [];
       for (const a of s.athletes || []) {
@@ -1978,6 +2002,50 @@ function gradeBets() {
   return GRADING;
 }
 
+// ---- live: pending legs in games that have started get ESPN's box score each time the Bets tab is opened or
+// the app comes back to the screen (not continuously). A game ESPN calls final is graded straight away.
+let LIVE_AT = 0, LIVE_BUSY = null;
+const legStarted = l => l.status === 'Pending' && !l.manual && Date.parse(l.tip_iso) <= Date.now();
+function refreshLive() {
+  if (LIVE_BUSY) return LIVE_BUSY;
+  LIVE_BUSY = (async () => {
+    const gids = [...new Set(BETS.flatMap(b => b.legs.filter(legStarted).map(l => l.gid)))];
+    if (!gids.length) return false;
+    const boxes = await Promise.all(gids.map(g => espnBox(g, 30e3)));
+    let graded = 0;
+    gids.forEach((gid, i) => {
+      if (!boxes[i] || !boxes[i].final) return;
+      for (const b of BETS) for (const l of b.legs) if (l.gid === gid && l.status === 'Pending' && !l.manual) { gradeLeg(l, boxes[i]); graded++; }
+    });
+    if (graded) { BETS.forEach(settleBet); saveBets(); }
+    LIVE_AT = Date.now();
+    return true;
+  })().finally(() => { LIVE_BUSY = null; });
+  return LIVE_BUSY;
+}
+function rerenderBets() {                        // after new live numbers: redraw the list where you are (not mid-edit)
+  if (!location.hash.startsWith('#/bets') || EDIT_ID || TRK.sub === 'analytics') return;
+  const y = window.scrollY; renderTrk(); window.scrollTo(0, y);
+}
+const liveBox = l => { const bx = ESPN_BOX[l.gid]; return l.status === 'Pending' && bx && (bx.state === 'in' || bx.state === 'post') ? bx : null; };
+const scoreTxt = bx => bx && bx.score.away && bx.score.home ? `${bx.score.away.team} ${bx.score.away.score} – ${bx.score.home.score} ${bx.score.home.team}` : '';
+// where a pending leg stands right now: its number so far, and a bar towards the line
+function liveLeg(l) {
+  const bx = liveBox(l);
+  if (!bx) return '';
+  const row = bx.p[l.pid];
+  if (!row) return `<div class="lv"><span class="lvtag">${bx.state === 'post' ? 'Final' : 'Live'}</span><span class="small">hasn't played yet${bx.state === 'post' ? ' (grading shortly)' : ''}</span></div>`;
+  const v = STAT[l.stat].parts.reduce((t, s) => t + (row[s] || 0), 0), over = l.side === 'over';
+  const past = v > l.line, gap = Math.abs(l.line - v);
+  const word = over ? (past ? 'hit ✓' : `needs ${fmtN(gap)} more`) : (past ? 'over the line ✗' : `${fmtN(gap)} to spare`);
+  const cls = past ? (over ? 'up' : 'down') : '';
+  const sc = Math.max(l.line, v, 0.5);                  // bar: 0 .. the line (or his number once past it); tick = the line
+  return `<div class="lv"><span class="lvtag${bx.state === 'post' ? ' fin' : ''}">${bx.state === 'post' ? 'Final' : 'Live'}</span><b class="${cls}">${v} ${esc(STAT[l.stat].short)}</b>
+    <span class="small">${row.min} min · <span class="${cls}">${word}</span></span>
+    <span class="lvbar ${over ? 'ov' : 'un'}${past ? ' past' : ''}" aria-hidden="true"><i style="width:${(v ? Math.max(3, 100 * v / sc) : 0).toFixed(0)}%"></i><s style="left:${(100 * l.line / sc).toFixed(0)}%"></s></span></div>`;
+}
+const fmtN = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
+
 // ---- the tracker page ---------------------------------------------------------------------------------
 const betTime = b => Math.max(...b.legs.map(l => Date.parse(l.tip_iso) || 0), 0) || Date.parse(b.placedAt);
 const betDay = b => { const l = b.legs.slice().sort((x, y) => Date.parse(x.tip_iso) - Date.parse(y.tip_iso))[0]; return l ? String(l.tip).split(',')[0] : 'Unknown'; };
@@ -1991,7 +2059,7 @@ function legLine(l, b) {
   return `<div class="bc-leg ${l.status.toLowerCase()}"><div><b>${esc(sideTxt(l))}</b> · <a href="#/p/${esc(l.pid)}/${esc(l.gid)}">${esc(l.name)}</a> <span class="badge pos">${esc(l.pos)}</span>${res}</div>
     <span class="small">${esc(l.team)} ${l.home ? 'vs' : '@'} ${esc(l.opp)} · ${esc(l.tip)}${l.odds ? ` · leg @ ${l.odds.toFixed(2)}${l.book ? ' ' + esc(l.book) : ''}` : ''}</span>
     <span class="small">model ${pct(l.model)}${l.edge != null ? ` · edge ${sgn(100 * l.edge, 1)}%` : ''} · proj ${fmt(l.proj)} · ${fmt(l.min, 0)} min${l.rank ? ` · opp ${ord(l.rank.rank)}/${l.rank.of} conceding` : ''}</span>
-    ${hx ? `<span class="small">hit rate → edge at ${o ? o.toFixed(2) : 'your price'}: ${hx}</span>` : ''}</div>`;
+    ${hx ? `<span class="small">hit rate → edge at ${o ? o.toFixed(2) : 'your price'}: ${hx}</span>` : ''}${liveLeg(l)}</div>`;
 }
 function legDetails(l, b) {
   const rows = [['Bet', sideTxt(l)], ['Player', `${l.name} (${l.pos}, ${l.team})`], ['Game', `${l.game} · ${l.tip}`],
@@ -2034,7 +2102,7 @@ function betCard(b) {
   }
   const pl = plOf(b);
   return `<article class="betcard${isPrac(b) ? ' prac' : ''}" data-bet="${esc(b.id)}">
-    <div class="bc-top"><span class="st ${b.status.toLowerCase()}">${esc(b.status)}</span>${isPrac(b) ? '<span class="st prac">Practice</span>' : ''}<span class="small">${b.legs.length > 1 ? b.legs.length + '-leg multi · ' : ''}${esc(b.platform)} · placed ${esc(whenFull(b.placedAt))}</span>
+    <div class="bc-top"><span class="st ${b.status.toLowerCase()}">${esc(b.status)}</span>${b.legs.some(l => { const x = liveBox(l); return x && x.state === 'in'; }) ? '<span class="st live">Live</span>' : ''}${isPrac(b) ? '<span class="st prac">Practice</span>' : ''}<span class="small">${b.legs.length > 1 ? b.legs.length + '-leg multi · ' : ''}${esc(b.platform)} · placed ${esc(whenFull(b.placedAt))}</span>
       <b class="plv ${plCls(pl)}">${b.status === 'Pending' ? '' : fmtPL(pl)}</b></div>
     ${b.legs.map(l => legLine(l, b)).join('')}
     <div class="bc-nums"><span>Odds <b>${b.oddsTaken.toFixed(2)}</b></span><span>Stake <b>${fmtMoney(b.stake)}</b></span>
@@ -2048,6 +2116,31 @@ function betCard(b) {
 function plBox(key, label, val) {
   const hid = TRK.hide[key];
   return `<div class="plbox"><button class="linkbtn" type="button" data-hide="${key}">${hid ? 'Show' : 'Hide'}</button><span>${esc(label)}</span><b class="${hid ? '' : plCls(val)}">${hid ? '••••' : fmtPL(val)}</b></div>`;
+}
+// pending bets first, by game in tip-off order under a header per game (live score once it starts), then the
+// settled ones, newest first. A multi across games gets its own header at its first tip-off.
+const firstTip = b => Math.min(...b.legs.map(l => Date.parse(l.tip_iso) || Infinity));
+const gameKey = b => { const g = [...new Set(b.legs.map(l => l.gid))].sort(); return g.length === 1 ? g[0] : 'multi:' + g.join(','); };
+function gameHead(bets) {
+  const legs = bets[0].legs, gids = [...new Set(legs.map(l => l.gid))];
+  const n = `${bets.length} bet${bets.length > 1 ? 's' : ''} · ${fmtMoney(bets.reduce((t, x) => t + x.stake, 0))}`;
+  if (gids.length > 1) return `<div class="ghead"><b>Multi across ${gids.length} games</b><span class="small">${esc([...new Set(legs.map(l => l.game))].join(' + '))} · ${n}</span></div>`;
+  const l = legs[0], bx = ESPN_BOX[l.gid], on = bx && (bx.state === 'in' || bx.state === 'post');
+  return `<div class="ghead"><b>${esc(l.game)}</b>${on ? `<span class="score">${esc(scoreTxt(bx))}</span><span class="lvtag${bx.state === 'post' ? ' fin' : ''}">${esc(bx.state === 'post' ? 'Final' : bx.detail || 'Live')}</span>`
+    : `<span class="small">${esc(l.tip)}</span>`}<span class="small">${n}</span></div>`;
+}
+function betListHTML(list) {
+  const pend = list.filter(b => b.status === 'Pending')
+    .sort((a, b) => firstTip(a) - firstTip(b) || gameKey(a).localeCompare(gameKey(b)) || String(a.legs[0].name).localeCompare(String(b.legs[0].name)));
+  const done = list.filter(b => b.status !== 'Pending');
+  let html = '';
+  for (let i = 0; i < pend.length;) {
+    const k = gameKey(pend[i]), grp = [];
+    while (i < pend.length && gameKey(pend[i]) === k) grp.push(pend[i++]);
+    html += gameHead(grp) + grp.map(betCard).join('');
+  }
+  if (pend.length && done.length) html += '<div class="ghead"><b>Settled</b></div>';
+  return html + done.map(betCard).join('');
 }
 function renderBetsTab(el) {
   const days = [...new Map(BETS.map(b => [betDay(b), betTime(b)]).sort((a, b) => a[1] - b[1]))].sort((a, b) => b[1] - a[1]).map(x => x[0]);
@@ -2069,13 +2162,21 @@ function renderBetsTab(el) {
     <div class="bar" style="margin-bottom:10px"><select class="sel" id="tday" aria-label="Game day"><option value="all">All days</option>${days.map(d => `<option${d === TRK.day ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select>
       <select class="sel" id="tstatus" aria-label="Status">${['all', 'Pending', 'Won', 'Lost', 'Void'].map(s => `<option value="${s}"${s === TRK.status ? ' selected' : ''}>${s === 'all' ? 'Any status' : s}</option>`).join('')}</select>
       ${prac.length ? `<select class="sel" id="tkind" aria-label="Real or practice">${[['all', 'Real + practice'], ['real', 'Real money only'], ['practice', 'Practice only']].map(([k, l]) => `<option value="${k}"${k === TRK.kind ? ' selected' : ''}>${l}</option>`).join('')}</select>` : ''}
-      <button class="btn sm ghost" type="button" id="tgrade">Check results</button></div>
-    <div class="bets">${list.map(betCard).join('') || `<p class="small">${BETS.length ? 'No bets match these filters.' : 'No bets yet. Add props to the slip (the + on the Props tab, or Add to slip on a player\'s page), then Place bet.'}</p>`}</div>`;
+      <button class="btn sm ghost" type="button" id="tgrade">Update scores</button></div>
+    ${LIVE_AT && list.some(b => b.legs.some(liveBox)) ? `<p class="note" style="margin:0 0 6px">Live numbers from ESPN at ${new Date(LIVE_AT).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. They update each time you open this tab or come back to the app (or tap Update scores).</p>` : ''}
+    <div class="bets">${betListHTML(list) || `<p class="small">${BETS.length ? 'No bets match these filters.' : 'No bets yet. Add props to the slip (the + on the Props tab, or Add to slip on a player\'s page), then Place bet.'}</p>`}</div>`;
   $('#tday').onchange = e => { TRK.day = e.target.value; saveTrk(); renderTrk(); };
   $('#tstatus').onchange = e => { TRK.status = e.target.value; saveTrk(); renderTrk(); };
   if ($('#tkind')) $('#tkind').onchange = e => { TRK.kind = e.target.value; saveTrk(); renderTrk(); };
   $('#tprac').onchange = e => { setPractice(e.target.checked); renderTrk(); };
-  $('#tgrade').onclick = async () => { $('#tgrade').disabled = true; RESULTS_AT = 0; Object.keys(ESPN_BOX).forEach(k => { if (!ESPN_BOX[k].final) delete ESPN_BOX[k]; }); const ch = await gradeBets(); renderTrk(); toast(ch ? 'Results updated.' : 'No new results yet.'); };
+  $('#tgrade').onclick = async () => {
+    $('#tgrade').disabled = true; RESULTS_AT = 0; Object.keys(ESPN_BOX).forEach(k => { if (!ESPN_BOX[k].final) delete ESPN_BOX[k]; });
+    const before = BETS.filter(b => b.status === 'Pending').length;
+    const live = await refreshLive(), ch = await gradeBets();
+    const y = window.scrollY; renderTrk(); window.scrollTo(0, y);
+    const settled = before - BETS.filter(b => b.status === 'Pending').length;
+    toast(settled > 0 ? `${settled} bet${settled > 1 ? 's' : ''} settled.` : live ? 'Live numbers updated.' : ch ? 'Results updated.' : 'No games under way and no new results yet.');
+  };
   $$('[data-hide]', el).forEach(b => b.onclick = () => { TRK.hide[b.dataset.hide] = !TRK.hide[b.dataset.hide]; saveTrk(); renderTrk(); });
   $$('.betcard', el).forEach(card => {
     const b = BETS.find(x => x.id === card.dataset.bet);
@@ -2484,8 +2585,9 @@ function showBets() {
   if (SB_USER) syncNow();
   else if (!SB && hasSession()) initSync();
   gradeBets().then(ch => { if (ch && location.hash.startsWith('#/bets')) renderTrk(); });
+  refreshLive().then(ok => { if (ok) rerenderBets(); });       // live numbers for games under way
 }
-const hasSession = () => { try { return !!localStorage.getItem(SB_SESSION); } catch (e) { return false; } };
+const hasSession =() => { try { return !!localStorage.getItem(SB_SESSION); } catch (e) { return false; } };
 
 // ------------------------------------------------------------------------------------------------
 // sync between devices: the EPL site's Supabase project and login, its own table nba_bets (one row per bet, the bet
@@ -2739,6 +2841,8 @@ document.addEventListener('click', async e => {
 let LAST_VIS_SYNC = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && SB_USER && Date.now() - LAST_VIS_SYNC > 30e3) { LAST_VIS_SYNC = Date.now(); syncNow(); }
+  if (document.visibilityState === 'visible' && location.hash.startsWith('#/bets') && Date.now() - LIVE_AT > 20e3)
+    refreshLive().then(ok => { if (ok) rerenderBets(); });   // back in the app: fresh live numbers
 });
 
 // ------------------------------------------------------------------------------------------------
