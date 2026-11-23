@@ -2046,6 +2046,84 @@ function liveLeg(l) {
 }
 const fmtN = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 
+// ---- closing line value (user asked 23 Nov 2026) -----------------------------------------------------------
+// DraftKings' prop prices a few minutes before tip-off (free, via ESPN's odds API), saved by a GitHub Actions job to
+// nba.json on the 'closing' branch of lineboard-requests: { games: { gid: { at, src, p: { pid: { stat: [line, over,
+// under, open line, open over, open under] } } } } }. Each leg then keeps l.close (synced with the bet):
+//   line/over/under = DraftKings' closing line and prices; vig = 1/over + 1/under - 1 (the bookie's margin);
+//   fair = the chance the bet wins if it doesn't push with the vig taken out (proportionally), AT THE BET'S LINE;
+//   clv = your price x fair - 1 (positive = you beat the close).
+// If DraftKings closed at another line, fair comes from the projection that closing market implies, pushed through
+// the same stat distribution as the model (so a move of a point is worth what it's worth for that player and stat).
+const CLOSE_API = 'https://api.github.com/repos/valuevault-epl/lineboard-requests/contents/nba.json?ref=closing';
+const CLOSE_RAW = 'https://raw.githubusercontent.com/valuevault-epl/lineboard-requests/closing/nba.json';
+let CLOSE = null, CLOSE_AT = 0;
+async function loadClosing() {
+  if (CLOSE && Date.now() - CLOSE_AT < 3 * 60e3) return CLOSE;
+  try {
+    const tok = (localStorage.getItem('lineboard:refresh:token') || '').trim(), h = { Accept: 'application/vnd.github.raw+json' };
+    if (tok) h.Authorization = 'Bearer ' + tok;
+    let r = await fetch(CLOSE_API, { cache: 'no-store', headers: h }).catch(() => null);
+    if (!r || !r.ok) r = await fetch(CLOSE_RAW + '?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) { CLOSE = await r.json(); CLOSE_AT = Date.now(); }
+  } catch (e) {}
+  return CLOSE;
+}
+function closeFair(l, c) {
+  const [L, o, u] = c, io = 1 / o, iu = 1 / u, pOver = io / (io + iu);
+  const cond = (mu, line, side) => { const p = propProb(l.stat, mu, line, side); return p ? p.win / Math.max(1e-9, 1 - p.push) : null; };
+  let p = l.line === L ? (l.side === 'over' ? pOver : 1 - pOver) : null;
+  if (p == null && cond(L, L, 'over') != null) {
+    let lo = 0.01, hi = Math.max(4 * L, 10) + 20;                  // the projection at which P(over L) = pOver
+    for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (cond(m, L, 'over') < pOver) lo = m; else hi = m; }
+    p = cond((lo + hi) / 2, l.line, l.side);
+  }
+  return { vig: io + iu - 1, p };
+}
+function attachClose(l, b, G) {
+  const c = G.p && G.p[l.pid] && G.p[l.pid][l.stat];
+  if (!c) { l.close = { src: G.src, at: G.at, none: 'no DraftKings line for this player and market' }; return; }
+  const f = closeFair(l, c), o = legOdds(l, b), r4 = x => x == null ? null : +x.toFixed(4);
+  l.close = { src: G.src || 'DraftKings', at: G.at, line: c[0], over: c[1], under: c[2], open: c.length > 5 ? [c[3], c[4], c[5]] : null,
+    vig: r4(f.vig), fair: r4(f.p), fairOdds: f.p ? round2(1 / f.p) : null, clv: f.p && o > 1 ? r4(o * f.p - 1) : null, odds: o > 1 ? o : null };
+}
+function recalcClose(l, b) {
+  const c = l.close;
+  if (c && !c.none) attachClose(l, b, { src: c.src, at: c.at, p: { [l.pid]: { [l.stat]: [c.line, c.over, c.under, ...(c.open || [])] } } });
+}
+// legs without a closing price yet get one once their game is in the file; a game that was never captured gives up
+// 3 hours after tip-off. Returns true if any bet changed (then saved, so it syncs).
+async function refreshCloses() {
+  const now = Date.now();
+  const need = BETS.flatMap(b => b.legs.map(l => [l, b])).filter(([l]) => !l.close && l.gid && STAT[l.stat]
+    && Date.parse(l.tip_iso) - now < 30 * 60e3 && now - Date.parse(l.tip_iso) < 6 * 864e5);
+  if (!need.length) return false;
+  const C = await loadClosing();
+  if (!C || !C.games) return false;
+  let n = 0;
+  for (const [l, b] of need) {
+    const G = C.games[l.gid];
+    if (G) { attachClose(l, b, G); n++; }
+    else if (now - Date.parse(l.tip_iso) > 3 * 3600e3) { l.close = { none: 'closing prices not captured for this game' }; n++; }
+  }
+  if (n) saveBets();
+  return n > 0;
+}
+// a bet's CLV: a single's is its leg's; a multi's = its price x the product of its legs' fair chances - 1
+function betClv(b) {
+  if (b.legs.length === 1) { const c = b.legs[0].close; return c && c.fair != null ? b.oddsTaken * c.fair - 1 : null; }
+  if (!b.legs.every(l => l.close && l.close.fair != null)) return null;
+  return b.oddsTaken * b.legs.reduce((t, l) => t * l.close.fair, 1) - 1;
+}
+function closeTxt(l) {
+  const c = l.close;
+  if (!c) return '';
+  if (c.none) return `<span class="small">Closing price: ${esc(c.none)}</span>`;
+  const moved = c.line !== l.line ? ` (DK line ${lineTxt(c.line)}: yours is ${forSide(l, c.line - l.line) > 0 ? 'better' : 'worse'})` : '';
+  return `<span class="small">Close ${esc(/draft\s*kings/i.test(c.src) ? 'DK' : c.src)}: O ${lineTxt(c.line)} ${c.over.toFixed(2)} / U ${c.under.toFixed(2)} · vig ${(100 * c.vig).toFixed(1)}% · fair ${c.fairOdds != null ? c.fairOdds.toFixed(2) : '–'}${moved}${
+    c.clv != null ? ` → <b class="${plCls(c.clv)}">CLV ${sgn(100 * c.clv, 1)}%</b>` : ''}</span>`;
+}
+
 // ---- the tracker page ---------------------------------------------------------------------------------
 const betTime = b => Math.max(...b.legs.map(l => Date.parse(l.tip_iso) || 0), 0) || Date.parse(b.placedAt);
 const betDay = b => { const l = b.legs.slice().sort((x, y) => Date.parse(x.tip_iso) - Date.parse(y.tip_iso))[0]; return l ? String(l.tip).split(',')[0] : 'Unknown'; };
@@ -2059,7 +2137,7 @@ function legLine(l, b) {
   return `<div class="bc-leg ${l.status.toLowerCase()}"><div><b>${esc(sideTxt(l))}</b> · <a href="#/p/${esc(l.pid)}/${esc(l.gid)}">${esc(l.name)}</a> <span class="badge pos">${esc(l.pos)}</span>${res}</div>
     <span class="small">${esc(l.team)} ${l.home ? 'vs' : '@'} ${esc(l.opp)} · ${esc(l.tip)}${l.odds ? ` · leg @ ${l.odds.toFixed(2)}${l.book ? ' ' + esc(l.book) : ''}` : ''}</span>
     <span class="small">model ${pct(l.model)}${l.edge != null ? ` · edge ${sgn(100 * l.edge, 1)}%` : ''} · proj ${fmt(l.proj)} · ${fmt(l.min, 0)} min${l.rank ? ` · opp ${ord(l.rank.rank)}/${l.rank.of} conceding` : ''}</span>
-    ${hx ? `<span class="small">hit rate → edge at ${o ? o.toFixed(2) : 'your price'}: ${hx}</span>` : ''}${liveLeg(l)}</div>`;
+    ${hx ? `<span class="small">hit rate → edge at ${o ? o.toFixed(2) : 'your price'}: ${hx}</span>` : ''}${closeTxt(l)}${liveLeg(l)}</div>`;
 }
 function legDetails(l, b) {
   const rows = [['Bet', sideTxt(l)], ['Player', `${l.name} (${l.pos}, ${l.team})`], ['Game', `${l.game} · ${l.tip}`],
@@ -2077,6 +2155,12 @@ function legDetails(l, b) {
     ['Minutes', `projected ${fmt(l.min)}${l.avg_min != null ? `, season avg ${fmt(l.avg_min)}, last 10 ${fmt(l.l10_min)}` : ''}`],
     ['Rest', l.b2b ? 'back-to-back' : l.rest != null ? `${fmt(l.rest, 0)} day${l.rest === 1 ? '' : 's'}` : '–'],
     ['Game model', l.margin != null ? `margin ${sgn(l.margin)} for ${l.home ? l.team : l.opp}, total ${fmt(l.total)}, 20+ blowout ${pct(l.blowout)}` : '–'],
+    ...(l.close && !l.close.none ? [['Closing price', `${l.close.src}: over ${lineTxt(l.close.line)} at ${l.close.over.toFixed(2)}, under at ${l.close.under.toFixed(2)} (taken ${whenFull(l.close.at)})`],
+      ['Bookie vig at close', `${(100 * l.close.vig).toFixed(1)}% (their margin: the two prices add up to ${(100 * (1 + l.close.vig)).toFixed(1)}%)`],
+      ['Fair price at your line', l.close.fair != null ? `${l.close.fairOdds.toFixed(2)} (${pct(l.close.fair, 1)} with the vig taken out${l.close.line !== l.line ? `, moved from their ${lineTxt(l.close.line)} line to your ${lineTxt(l.line)}` : ''})` : '–'],
+      ['Closing line value', l.close.clv != null ? `${sgn(100 * l.close.clv, 1)}% (your ${l.close.odds.toFixed(2)} vs fair ${l.close.fairOdds.toFixed(2)})` : '–'],
+      ...(l.close.open ? [['DraftKings opened at', `over ${lineTxt(l.close.open[0])} ${l.close.open[1].toFixed(2)} / under ${l.close.open[2].toFixed(2)}`]] : [])]
+      : l.close ? [['Closing price', l.close.none]] : []),
     ['Result', l.status === 'Pending' ? 'not graded yet' : l.status === 'Void' ? `void (${l.why || 'set by you'})` : `${l.actual ?? '?'} ${STAT[l.stat].short}${l.min_played != null ? ` in ${l.min_played} min` : ''} - ${l.status}${l.manual ? ' (set by you)' : ''}`],
     ['Added to slip', l.addedAt ? whenFull(l.addedAt) : '–']];
   return `<dl class="kvt">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
@@ -2107,7 +2191,8 @@ function betCard(b) {
     ${b.legs.map(l => legLine(l, b)).join('')}
     <div class="bc-nums"><span>Odds <b>${b.oddsTaken.toFixed(2)}</b></span><span>Stake <b>${fmtMoney(b.stake)}</b></span>
       <span>${b.status === 'Pending' ? 'To return' : 'Returned'} <b>${fmtMoney(b.status === 'Pending' ? b.stake * b.oddsTaken : b.stake + (b.profit || 0))}</b></span>
-      ${b.model != null ? `<span>Model <b>${pct(b.model, 1)}</b>${b.edge != null ? ` · edge <b class="${plCls(b.edge)}">${sgn(100 * b.edge, 1)}%</b>` : ''}</span>` : ''}</div>
+      ${b.model != null ? `<span>Model <b>${pct(b.model, 1)}</b>${b.edge != null ? ` · edge <b class="${plCls(b.edge)}">${sgn(100 * b.edge, 1)}%</b>` : ''}</span>` : ''}
+      ${(() => { const c = betClv(b); return c == null ? '' : `<span>CLV <b class="${plCls(c)}">${sgn(100 * c, 1)}%</b></span>`; })()}</div>
     ${b.voidAdjusted && b.paid == null ? '<p class="note" style="margin:0">A leg was void, so the payout here is the multi\'s price divided by that leg\'s own odds. If the bookie paid something else, put it in Edit → Paid out.</p>' : ''}
     ${b.note ? `<p class="note" style="margin:0">Note: ${esc(b.note)}</p>` : ''}
     <details class="more"><summary>All details</summary>${b.legs.map(l => legDetails(l, b)).join('<hr style="border:0;border-top:1px solid var(--line);margin:8px 0">')}</details>
@@ -2172,6 +2257,7 @@ function renderBetsTab(el) {
   $('#tgrade').onclick = async () => {
     $('#tgrade').disabled = true; RESULTS_AT = 0; Object.keys(ESPN_BOX).forEach(k => { if (!ESPN_BOX[k].final) delete ESPN_BOX[k]; });
     const before = BETS.filter(b => b.status === 'Pending').length;
+    CLOSE_AT = 0; await refreshCloses();
     const live = await refreshLive(), ch = await gradeBets();
     const y = window.scrollY; renderTrk(); window.scrollTo(0, y);
     const settled = before - BETS.filter(b => b.status === 'Pending').length;
@@ -2212,6 +2298,7 @@ function renderBetsTab(el) {
         if (st !== l.status) { l.status = st; l.manual = st !== 'Pending'; if (st !== 'Won' && st !== 'Lost') l.actual = st === 'Pending' ? null : l.actual; if (st === 'Void') l.why = 'set by you'; }
         else if (moved && !l.manual) { l.status = 'Pending'; l.actual = null; }      // re-grade at the new line
       });
+      b.legs.forEach(l => recalcClose(l, b));          // CLV again at the new price / line, from the saved closing prices
       settleBet(b); saveBets(); EDIT_ID = null; renderTrk();
       gradeBets().then(ch => { if (ch && location.hash.startsWith('#/bets')) renderTrk(); });
       fillHits(b.legs).then(ok => { if (ok) { saveBets(); if (location.hash.startsWith('#/bets')) renderTrk(); } });   // hit rates at the new line
@@ -2230,7 +2317,8 @@ function anaItems(bets = BETS) {
     const single = b.legs.length === 1, odds = legOdds(l, b), push = l.push || 0;
     out.push({ i: out.length, b, l, single, st: l.status, odds: odds > 1 ? odds : null,
       model: l.model != null ? Math.min(0.999, l.model / Math.max(1e-6, 1 - push)) : null,     // chance it wins if it doesn't push
-      edge: single ? (b.edge ?? l.edge ?? null) : (l.edge ?? null), t: Date.parse(l.tip_iso) || Date.parse(b.placedAt) });
+      edge: single ? (b.edge ?? l.edge ?? null) : (l.edge ?? null), t: Date.parse(l.tip_iso) || Date.parse(b.placedAt),
+      clv: l.close && l.close.fair != null && odds > 1 ? odds * l.close.fair - 1 : null });
   }
   return out;
 }
@@ -2241,7 +2329,7 @@ function itemMoney(it, how) {
   return { s: b.status === 'Void' ? 0 : stakeOf(b) / b.legs.length, pl: (plOf(b) || 0) / b.legs.length, o: b.oddsTaken };
 }
 function aggr(items, how) {
-  const g = { n: items.length, w: 0, lo: 0, v: 0, mw: 0, mn: 0, mexp: 0, mvar: 0, on: 0, osum: 0, en: 0, esum: 0, s: 0, pl: 0, var: 0 };
+  const g = { n: items.length, w: 0, lo: 0, v: 0, mw: 0, mn: 0, mexp: 0, mvar: 0, on: 0, osum: 0, en: 0, esum: 0, s: 0, pl: 0, var: 0, cn: 0, csum: 0, cbeat: 0 };
   for (const it of items) {
     if (it.st === 'Won') g.w++; else if (it.st === 'Lost') g.lo++; else g.v++;
     if (it.st !== 'Void') {
@@ -2249,6 +2337,7 @@ function aggr(items, how) {
       if (it.odds) { g.on++; g.osum += it.odds; }
     }
     if (it.edge != null) { g.en++; g.esum += it.edge; }
+    if (it.clv != null) { g.cn++; g.csum += it.clv; if (it.clv > 0) g.cbeat++; }
     const m = itemMoney(it, how);
     if (m && m.s > 0) { g.s += m.s; g.pl += m.pl; g.var += m.s * m.s * Math.max(0.01, m.o - 1); }
   }
@@ -2258,6 +2347,7 @@ function aggr(items, how) {
   g.zm = g.mvar > 0 ? (g.mw - g.mexp) / Math.sqrt(g.mvar) : null;
   g.odds = g.on ? g.osum / g.on : null;
   g.edge = g.en ? g.esum / g.en : null;
+  g.clv = g.cn ? g.csum / g.cn : null;
   g.roi = g.s > 0 ? g.pl / g.s : null;
   g.z = g.var > 0 ? g.pl / Math.sqrt(g.var) : null;
   return g;
@@ -2275,6 +2365,7 @@ const B = {
   odds: ['Under 1.50', '1.50–1.79', '1.80–1.99', '2.00–2.49', '2.50–3.49', '3.50+'], edge: ['Below 0%', '0–5%', '5–10%', '10–15%', '15–20%', '20%+'],
   model: ['Under 40%', '40–50%', '50–60%', '60–70%', '70%+'], gap: ['Against you', '0–10% your way', '10–20% your way', '20%+ your way'],
   when: ['Under 1h', '1–3h', '3–8h', '8–24h', '24h+'], stake: ['Smallest third of your stakes', 'Middle third', 'Biggest third'],
+  clv: ['Below −5%', '−5% to 0', '0 to +5%', '+5% or more'],
 };
 // stakes are set by confidence, so "stake size" is relative to your own: thirds of every settled bet's stake
 let STAKE_CUTS = null;
@@ -2296,6 +2387,9 @@ const DIMS = [
   { k: 'wday', g: 'Your bet', label: 'Day of the week', f: it => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(it.t).getDay()], o: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
   { k: 'week', g: 'Your bet', label: 'Week', f: it => 'Week of ' + weekOf(it.t).toLocaleDateString([], { day: 'numeric', month: 'short' }), sk: it => weekOf(it.t).getTime(), time: true },
   { k: 'month', g: 'Your bet', label: 'Month', f: it => new Date(it.t).toLocaleDateString([], { month: 'short', year: 'numeric' }), sk: it => { const d = new Date(it.t); return d.getFullYear() * 12 + d.getMonth(); }, time: true },
+  { k: 'clv', g: 'Closing line', label: 'CLV vs the DraftKings close', f: it => band(it.clv, [-0.05, 0, 0.05], B.clv), o: B.clv },
+  { k: 'clvmove', g: 'Closing line', label: 'Your line vs the closing line', f: it => { const c = it.l.close; return !c || c.none ? null : c.line === it.l.line ? 'Same line'
+      : forSide(it.l, c.line - it.l.line) > 0 ? 'Yours better' : 'Yours worse'; }, o: ['Yours better', 'Same line', 'Yours worse'] },
   { k: 'edge', g: 'Model', label: 'Model edge', f: it => band(it.edge, [0, 0.05, 0.1, 0.15, 0.2], B.edge), o: B.edge },
   { k: 'modelp', g: 'Model', label: 'Model chance', f: it => band(it.model, [0.4, 0.5, 0.6, 0.7], B.model), o: B.model },
   { k: 'proj', g: 'Model', label: 'Projection vs line', f: it => it.l.proj == null ? null : band(forSide(it.l, it.l.proj - it.l.line) / Math.max(1, it.l.line), [0, 0.1, 0.2], B.gap), o: B.gap },
@@ -2384,7 +2478,8 @@ function legsCSV() {
   const cols = ['placed', 'tip', 'bet_id', 'legs_in_bet', 'player', 'pos', 'team', 'opp', 'home', 'stat', 'side', 'line', 'leg_odds', 'book_leg', 'odds_taken', 'stake',
     'bookie', 'leg_status', 'bet_status', 'actual', 'min_played', 'bet_profit', 'model', 'push', 'edge_leg', 'edge_bet', 'proj', 'season_avg', 'proj_min', 'avg_min', 'l10_min', 'starter_rate',
     'injury', 'play_prob', 'matchup', 'rank_season', 'rank_l10', 'rank_effect', 'home_margin', 'total', 'blowout20', 'rest', 'b2b',
-    ...HIT_WIN.flatMap(([w]) => [w + '_hits', w + '_games', w + '_push', w + '_avg', w + '_edge']), 'note', 'practice'];
+    ...HIT_WIN.flatMap(([w]) => [w + '_hits', w + '_games', w + '_push', w + '_avg', w + '_edge']), 'note', 'practice',
+    'close_book', 'close_line', 'close_over', 'close_under', 'close_vig', 'close_fair_prob', 'close_fair_odds', 'clv', 'open_line', 'open_over', 'open_under'];
   const q = v => v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
   const rows = [];
   for (const b of BETS) for (const l of b.legs) {
@@ -2392,7 +2487,8 @@ function legsCSV() {
     rows.push([b.placedAt, l.tip_iso, b.id, b.legs.length, l.name, l.pos, l.team, l.opp, l.home ? 1 : 0, l.stat, l.side, l.line, l.odds, l.book, b.oddsTaken, b.stake,
       b.platform, l.status, b.status, l.actual, l.min_played, b.profit, l.model, l.push, l.edge, b.edge, l.proj, l.avg, l.min, l.avg_min, l.l10_min, l.start,
       l.inj, l.p, l.matchup, r.season ?? (l.rank && l.rank.basis === 'season' ? l.rank.rank : null), r.l10, r.effect, l.margin, l.total, l.blowout, l.rest, l.b2b == null ? null : l.b2b ? 1 : 0,
-      ...HIT_WIN.flatMap(([w]) => { const x = l.hits && l.hits[w], e = hitEdge(x, o); return x ? [x.h, x.n, x.p, x.avg, e == null ? null : +e.toFixed(4)] : [null, null, null, null, null]; }), b.note, isPrac(b) ? 1 : 0].map(q).join(','));
+      ...HIT_WIN.flatMap(([w]) => { const x = l.hits && l.hits[w], e = hitEdge(x, o); return x ? [x.h, x.n, x.p, x.avg, e == null ? null : +e.toFixed(4)] : [null, null, null, null, null]; }), b.note, isPrac(b) ? 1 : 0,
+      ...(() => { const c = l.close && !l.close.none ? l.close : null; return c ? [c.src, c.line, c.over, c.under, c.vig, c.fair, c.fairOdds, c.clv, ...(c.open || [null, null, null])] : Array(11).fill(null); })()].map(q).join(','));
   }
   return cols.join(',') + '\n' + rows.join('\n');
 }
@@ -2436,6 +2532,9 @@ function renderAnalytics(el) {
   let tiles = [['Settled bets', settled.length + (settled.length > graded.length ? ` (${settled.length - graded.length} void)` : '')], ['Win rate', graded.length ? pct(won / graded.length) : '–'],
     ['Total staked', fmtSt(staked)], ['Net P/L', fmtPL(pl), plCls(pl), splitPL], ['ROI', dollarsSt > 0 ? sgn(100 * dollarsPL / dollarsSt, 1) + '%' : '–', plCls(dollarsPL)],
     ['Model expected', singles.length ? `${exp.toFixed(1)} wins` : '–', '', singles.length ? `of ${singles.length} singles · you won ${got}` : 'singles only']];
+  const clvs = pool.flatMap(b => b.legs.map(l => { const o = legOdds(l, b); return l.close && l.close.fair != null && o > 1 ? o * l.close.fair - 1 : null; })).filter(x => x != null);
+  if (clvs.length) { const a = clvs.reduce((t, x) => t + x, 0) / clvs.length;
+    tiles.push(['Avg CLV', sgn(100 * a, 1) + '%', plCls(a), `beat the DraftKings close on ${clvs.filter(x => x > 0).length} of ${clvs.length} legs`]); }
   if (TRK.adv) {
     const wins = settled.filter(b => b.status === 'Won').map(b => plOf(b)), losses = settled.filter(b => b.status === 'Lost').map(b => plOf(b));
     let streak = 0, type = null;
@@ -2466,18 +2565,19 @@ function renderAnalytics(el) {
   const cells = a => `<td class="n">${a.n}</td><td class="n">${pct(a.hit)}</td><td class="n">${pct(a.mp)}</td>
     <td class="n ${a.vs == null ? '' : plCls(a.vs)}${big(a.zm) ? ' flag' : ''}">${a.vs == null ? '–' : sgn(100 * a.vs, 0) + ' pts'}</td>
     <td class="n">${fmt(a.odds, 2)}</td><td class="n">${a.edge == null ? '–' : sgn(100 * a.edge, 1) + '%'}</td>
+    <td class="n ${a.clv == null ? '' : plCls(a.clv)}">${a.clv == null ? '–' : sgn(100 * a.clv, 1) + '%'}${a.cn ? `<span class="sub">${a.cbeat}/${a.cn} beat</span>` : ''}</td>
     <td class="n ${plCls(a.pl)}">${a.s ? plTxt(a.pl) : '–'}</td><td class="n ${plCls(a.roi)}">${a.roi == null ? '–' : sgn(100 * a.roi, 1) + '%'}</td>
     <td class="n ${big(a.z) ? plCls(a.z) + ' flag' : ''}">${a.z == null ? '–' : sgn(a.z, 1)}</td>`;
   const rec = a => `${a.w}–${a.lo}${a.v ? ` · ${a.v} void` : ''}`;
   const legItem = it => {
     const l = it.l, x = l.hits && l.hits.l20, m = itemMoney(it, how);
     return `<li><b class="${it.st === 'Won' ? 'up' : it.st === 'Lost' ? 'down' : ''}">${it.st === 'Won' ? '✓' : it.st === 'Lost' ? '✗' : 'void'}</b> ${esc(new Date(it.t).toLocaleDateString([], { day: 'numeric', month: 'short' }))} ·
-      ${esc(l.name)} ${esc(sideTxt(l))}${it.odds ? ' @ ' + it.odds.toFixed(2) : ''} · got ${l.actual ?? '–'} · model ${pct(l.model)}${it.edge != null ? ` · edge ${sgn(100 * it.edge, 0)}%` : ''}${x && x.n ? ` · L20 ${x.h}/${x.n}` : ''}${m && m.s ? ` · <span class="${plCls(m.pl)}">${plTxt(m.pl)}</span>` : ''}${it.single ? '' : ' · multi leg'}</li>`;
+      ${esc(l.name)} ${esc(sideTxt(l))}${it.odds ? ' @ ' + it.odds.toFixed(2) : ''} · got ${l.actual ?? '–'} · model ${pct(l.model)}${it.edge != null ? ` · edge ${sgn(100 * it.edge, 0)}%` : ''}${it.clv != null ? ` · CLV <span class="${plCls(it.clv)}">${sgn(100 * it.clv, 0)}%</span>` : ''}${x && x.n ? ` · L20 ${x.h}/${x.n}` : ''}${m && m.s ? ` · <span class="${plCls(m.pl)}">${plTxt(m.pl)}</span>` : ''}${it.single ? '' : ' · multi leg'}</li>`;
   };
-  const COLS = [['n', 'Legs'], ['hit', 'Hit %'], ['mp', 'Model %'], ['vs', 'vs model'], ['odds', 'Avg odds'], ['edge', 'Avg edge'], ['pl', 'P/L'], ['roi', 'ROI'], ['z', 'z']];
+  const COLS = [['n', 'Legs'], ['hit', 'Hit %'], ['mp', 'Model %'], ['vs', 'vs model'], ['odds', 'Avg odds'], ['edge', 'Avg edge'], ['clv', 'Avg CLV'], ['pl', 'P/L'], ['roi', 'ROI'], ['z', 'z']];
   const head = `<tr><th data-sort="" class="${S ? '' : 'sorted'}" data-dir="">${esc(ds.map(d => d.label).join(' · '))}</th>${COLS.map(([k, l]) => `<th class="n${S === k ? ' sorted' : ''}" data-sort="${k}" data-dir="${S === k ? (dir === 1 ? '↑' : '↓') : ''}">${l}</th>`).join('')}</tr>`;
   const rowHTML = (r, i) => `<tr class="click${TRK.aopen === r.key ? ' open' : ''}" data-arow="${i}"><td class="g">${esc(r.key)}<span class="sub">${rec(r.a)}</span></td>${cells(r.a)}</tr>${TRK.aopen !== r.key ? ''
-    : `<tr class="legs"><td colspan="10"><ul style="margin:6px 0 0;padding-left:16px">${r.items.slice().sort((a, b) => b.t - a.t).slice(0, 60).map(legItem).join('')}</ul>
+    : `<tr class="legs"><td colspan="11"><ul style="margin:6px 0 0;padding-left:16px">${r.items.slice().sort((a, b) => b.t - a.t).slice(0, 60).map(legItem).join('')}</ul>
       ${r.items.length > 60 ? `<p class="small">…and ${r.items.length - 60} more (the CSV has them all).</p>` : ''}
       <div class="bar" style="margin-top:6px"><button class="btn sm ghost" type="button" data-afocus="${i}">Filter to this group</button><span class="small">then group by something else to dig in</span></div></td></tr>`}`;
   const fvals = groupBy(base, [DIM[TRK.afd]], how).map(r => r.key);
@@ -2511,12 +2611,12 @@ function renderAnalytics(el) {
       <select class="sel" id="amin" aria-label="Smallest group">${[1, 5, 10, 20, 30].map(n => `<option value="${n}"${n === (+TRK.amin || 1) ? ' selected' : ''}>${n === 1 ? 'Every group' : n + '+ legs'}</option>`).join('')}</select></div>
     <div class="tw"><table class="atable"><thead>${head}</thead><tbody>
       <tr class="total"><td class="g">All ${items.length} leg${items.length === 1 ? '' : 's'}<span class="sub">${rec(tot)}</span></td>${cells(tot)}</tr>
-      ${rows.map(rowHTML).join('') || '<tr><td colspan="10" class="small">No settled legs match.</td></tr>'}</tbody></table></div>
+      ${rows.map(rowHTML).join('') || '<tr><td colspan="11" class="small">No settled legs match.</td></tr>'}</tbody></table></div>
     <p class="note">Tap a column to sort, a row to see its legs. <b>Legs</b>: settled legs (each leg of a multi counts on its own). <b>Hit %</b> leaves out voids and pushes.
       <b>Model %</b>: the model's chance when you bet. <b>vs model</b>: how much more or less often you hit than it said; bold once it's 2+ luck-widths out, the sign the model is off in that spot.
       <b>$1 on every leg</b> scores every leg as a $1 single at its own price (judges the picks, not how much you put on); <b>Your stakes</b> uses your real money, a multi's stake and profit split evenly over its legs.
       <b>Stake size</b> splits your bets into thirds by how much you put on, so it shows whether your confidence picks the winners.
-      <b>z</b>: profit in luck-widths from break-even; ±2 happens by chance about 1 time in 20. <b>Hit-rate edge</b> = hit rate × your odds − 1. Factors are saved when a bet goes on the slip; bets from before a factor existed show as “Not recorded”.</p>
+      <b>Avg CLV</b>: closing line value, your price against DraftKings' closing price at your line with their vig taken out (taken a few minutes before tip-off). Beating the close regularly is the quickest sign the edge is real, long before profit can show it; "x/y beat" = legs that got a better price than fair at the close. <b>z</b>: profit in luck-widths from break-even; ±2 happens by chance about 1 time in 20. <b>Hit-rate edge</b> = hit rate × your odds − 1. Factors are saved when a bet goes on the slip; bets from before a factor existed show as “Not recorded”.</p>
     <div class="bar" style="margin-top:8px"><button class="btn sm ghost" type="button" id="acsv">Download every leg (CSV)</button><span class="small">all ${BETS.reduce((t, b) => t + b.legs.length, 0)} legs with every saved number, for a spreadsheet</span></div>`;
   $('#tadv').onchange = e => { TRK.adv = e.target.checked; saveTrk(); renderTrk(); };
   const rr = () => { saveTrk(); const y = window.scrollY; renderTrk(); window.scrollTo(0, y); };
@@ -2586,6 +2686,7 @@ function showBets() {
   else if (!SB && hasSession()) initSync();
   gradeBets().then(ch => { if (ch && location.hash.startsWith('#/bets')) renderTrk(); });
   refreshLive().then(ok => { if (ok) rerenderBets(); });       // live numbers for games under way
+  refreshCloses().then(ok => { if (ok) rerenderBets(); });     // closing prices for bets whose games have tipped off
 }
 const hasSession =() => { try { return !!localStorage.getItem(SB_SESSION); } catch (e) { return false; } };
 
@@ -2842,7 +2943,7 @@ let LAST_VIS_SYNC = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && SB_USER && Date.now() - LAST_VIS_SYNC > 30e3) { LAST_VIS_SYNC = Date.now(); syncNow(); }
   if (document.visibilityState === 'visible' && location.hash.startsWith('#/bets') && Date.now() - LIVE_AT > 20e3)
-    refreshLive().then(ok => { if (ok) rerenderBets(); });   // back in the app: fresh live numbers
+    Promise.all([refreshLive(), refreshCloses()]).then(([a, c]) => { if (a || c) rerenderBets(); });   // back in the app: fresh numbers
 });
 
 // ------------------------------------------------------------------------------------------------
