@@ -1895,6 +1895,7 @@ function renderSlip() {
     BETS.unshift(bet); saveBets();
     SLIP = []; saveSlip(); SLIP_FORM = null;
     openSlip(false); renderSlip(); refreshAddButtons();       // renderSlip while closed just resets the button's count
+    askClosing();                                   // the cloud takes this game's closing prices just before tip-off
     toast(bet.practice ? 'Practice bet placed - it\'s in the Bets tab, kept out of your real totals.' : 'Bet placed - it\'s in the Bets tab.');
     if (location.hash.startsWith('#/bets')) renderTrk();
   };
@@ -2108,6 +2109,32 @@ async function refreshCloses() {
   }
   if (n) saveBets();
   return n > 0;
+}
+// The cloud job that takes the closing prices can't rely on GitHub's schedule (it fired twice in a day on 23-24 Nov),
+// so the phone tells it how long to stay around: closing-request.json {at, until} on main of lineboard-requests, until =
+// the last tip-off among your pending bets. That push starts a run at once; each run waits up to 5.5 hours for its games
+// and hands over to the next until 'until'. Sent when a bet is placed or the Bets tab opens, only if it covers a later
+// game than the last ask (or that ask is 5+ hours old). Uses the GitHub refresh token, like the Refresh buttons.
+const CREQ_API = 'https://api.github.com/repos/valuevault-epl/lineboard-requests/contents/closing-request.json';
+let CREQ_BUSY = false;
+async function askClosing() {
+  const tok = (localStorage.getItem('lineboard:refresh:token') || '').trim(), now = Date.now();
+  if (!tok || CREQ_BUSY) return false;
+  const tips = BETS.flatMap(b => b.status === 'Pending' ? b.legs : []).filter(l => !l.close && Date.parse(l.tip_iso) > now + 4 * 60e3).map(l => Date.parse(l.tip_iso));
+  if (!tips.length) return false;
+  const until = Math.max(...tips), last = loadLS('lineboard:closing:asked', null);
+  if (last && last.until >= until && now - last.at < 5 * 3600e3) return false;
+  CREQ_BUSY = true;
+  try {
+    const h = { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    const g = await fetch(CREQ_API + '?ref=main&t=' + now, { cache: 'no-store', headers: h });
+    const body = { message: 'Closing prices until ' + new Date(until).toISOString().slice(0, 16) + 'Z',
+      content: btoa(JSON.stringify({ at: new Date(now).toISOString(), until: new Date(until).toISOString() })) };
+    if (g.ok) body.sha = (await g.json()).sha;
+    const r = await fetch(CREQ_API, { method: 'PUT', headers: h, body: JSON.stringify(body) });
+    if (r.ok) { saveLS('lineboard:closing:asked', { until, at: now }); return true; }
+  } catch (e) {} finally { CREQ_BUSY = false; }
+  return false;
 }
 // a bet's CLV: a single's is its leg's; a multi's = its price x the product of its legs' fair chances - 1
 function betClv(b) {
@@ -2687,6 +2714,7 @@ function showBets() {
   gradeBets().then(ch => { if (ch && location.hash.startsWith('#/bets')) renderTrk(); });
   refreshLive().then(ok => { if (ok) rerenderBets(); });       // live numbers for games under way
   refreshCloses().then(ok => { if (ok) rerenderBets(); });     // closing prices for bets whose games have tipped off
+  askClosing();                                                 // and make sure the cloud is there to take them
 }
 const hasSession =() => { try { return !!localStorage.getItem(SB_SESSION); } catch (e) { return false; } };
 
