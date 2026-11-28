@@ -1344,11 +1344,45 @@ const PROP_KEY = 'lineboard:mu:props';
 let PROPS = (() => { try { return JSON.parse(localStorage.getItem(PROP_KEY) || 'null'); } catch (e) { return null; } })() || {};
 if (!PROPS.games) PROPS.games = {};
 function saveProps() { try { localStorage.setItem(PROP_KEY, JSON.stringify(PROPS)); return true; } catch (e) { return false; } }
-const upcomingGames = () => IDX.games.filter(g => Date.parse(g.tip_iso) > Date.now());
-function pruneProps() {                                       // started games and games no longer on the slate
-  const keep = new Set(upcomingGames().map(g => g.id));
+// Has a game really started? Tip-offs run late and games get pushed back (user, 28 Nov 2026: games vanished while he
+// was betting 10 minutes before the real start), so ESPN's scoreboard state decides ('pre' = not started). Until
+// ESPN has answered, a game counts as started from its scheduled time. Checked when the page opens, on the Props tab
+// every minute, and when the app comes back to the screen.
+const GAME_STATE = {};
+let STATE_AT = 0, STATE_BUSY = null;
+const ESPN_BOARD = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=';
+const etDay = iso => new Date(Date.parse(iso) - 5 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '');
+const hasStarted = g => { const st = GAME_STATE[g.id]; return st ? st !== 'pre' : Date.parse(g.tip_iso) <= Date.now(); };
+function refreshStates(force) {
+  if (STATE_BUSY) return STATE_BUSY;
+  if (!IDX || (!force && Date.now() - STATE_AT < 50e3)) return Promise.resolve(false);
+  STATE_BUSY = (async () => {
+    const due = IDX.games.filter(g => Date.parse(g.tip_iso) - Date.now() < 15 * 60e3 && Date.now() - Date.parse(g.tip_iso) < 6 * 3600e3 && GAME_STATE[g.id] !== 'post');
+    if (!due.length) return false;
+    let changed = false;
+    for (const d of new Set(due.map(g => etDay(g.tip_iso)))) {
+      try {
+        const r = await fetch(ESPN_BOARD + d, { cache: 'no-store' });
+        if (!r.ok) continue;
+        for (const e of (await r.json()).events || []) {
+          const st = (((e.status || {}).type) || {}).state || '';
+          if (st && GAME_STATE[e.id] !== st) { changed = changed || !!gameById(String(e.id)); GAME_STATE[e.id] = st; }
+        }
+      } catch (e) {}
+    }
+    STATE_AT = Date.now();
+    return changed;
+  })().finally(() => { STATE_BUSY = null; });
+  return STATE_BUSY;
+}
+const upcomingGames = () => IDX.games.filter(g => !hasStarted(g));
+const legOpen = l => { const g = gameById(l.gid); return g ? !hasStarted(g) : Date.parse(l.tip_iso) > Date.now(); };
+function pruneProps() {     // games ESPN says have started, games 6+ hours past their time, and games off the slate
   let changed = false;
-  for (const gid of Object.keys(PROPS.games)) if (!keep.has(gid)) { delete PROPS.games[gid]; changed = true; }
+  for (const gid of Object.keys(PROPS.games)) {
+    const g = gameById(gid), st = GAME_STATE[gid];
+    if (!g || (st && st !== 'pre') || Date.now() - Date.parse(g.tip_iso) > 6 * 3600e3) { delete PROPS.games[gid]; changed = true; }
+  }
   if (changed) saveProps();
 }
 const nickT = s => { const w = String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim().split(/\s+/); return w[w.length - 1]; };
@@ -1401,7 +1435,7 @@ function propOptions() {
   const list = [], unmatched = new Set(), now = Date.now();
   for (const [gid, G] of Object.entries(PROPS.games || {})) {
     const g = gameById(gid);
-    if (!g || Date.parse(g.tip_iso) <= now) continue;
+    if (!g || hasStarted(g)) continue;
     const who = playerMatcher(gid, g), groups = {};
     for (const [book, mkt, name, side, point, price] of G.rows || []) {
       const M = MKT_STAT[mkt];
@@ -1524,7 +1558,9 @@ async function getProps(gids, markets) {
   if (got.length) scheduleSync(500);                              // the new prices go up to the account
 }
 
+const rerenderProps = () => { if (!location.hash.startsWith('#/props')) return; const y = window.scrollY; showProps(); window.scrollTo(0, y); };
 function showProps() {
+  refreshStates().then(ch => { if (ch) rerenderProps(); });     // a late tip-off keeps its game here
   pruneProps();
   const ups = upcomingGames(), keys = keysNow();
   let pick = (prefs.propPick || []).filter(id => ups.some(g => g.id === id));
@@ -1789,7 +1825,7 @@ function hitsTxt(l) {
 }
 function addToSlip(spec) {
   const g = gameById(spec.gid);
-  if (g && Date.parse(g.tip_iso) <= Date.now()) { toast('That game has started.'); return false; }
+  if (g && hasStarted(g)) { toast('That game has started.'); return false; }
   const leg = makeLeg(spec);
   if (!leg) { toast('Couldn\'t add that one: the player isn\'t on this slate.'); return false; }
   if (SLIP.some(l => l.id === leg.id)) { toast('Already in your slip.'); return false; }
@@ -2086,17 +2122,18 @@ function attachClose(l, b, G) {
   if (!c) { l.close = { src: G.src, at: G.at, none: 'no DraftKings line for this player and market' }; return; }
   const f = closeFair(l, c), o = legOdds(l, b), r4 = x => x == null ? null : +x.toFixed(4);
   l.close = { src: G.src || 'DraftKings', at: G.at, line: c[0], over: c[1], under: c[2], open: c.length > 5 ? [c[3], c[4], c[5]] : null,
-    vig: r4(f.vig), fair: r4(f.p), fairOdds: f.p ? round2(1 / f.p) : null, clv: f.p && o > 1 ? r4(o * f.p - 1) : null, odds: o > 1 ? o : null };
+    vig: r4(f.vig), fair: r4(f.p), fairOdds: f.p ? round2(1 / f.p) : null, clv: f.p && o > 1 ? r4(o * f.p - 1) : null, odds: o > 1 ? o : null,
+    final: !!G.final || Date.now() - Date.parse(l.tip_iso) > 3600e3, after: Date.parse(b.placedAt) > Date.parse(G.at) || undefined };
 }
 function recalcClose(l, b) {
   const c = l.close;
-  if (c && !c.none) attachClose(l, b, { src: c.src, at: c.at, p: { [l.pid]: { [l.stat]: [c.line, c.over, c.under, ...(c.open || [])] } } });
+  if (c && !c.none) attachClose(l, b, { src: c.src, at: c.at, final: c.final, p: { [l.pid]: { [l.stat]: [c.line, c.over, c.under, ...(c.open || [])] } } });
 }
 // legs without a closing price yet get one once their game is in the file; a game that was never captured gives up
 // 3 hours after tip-off. Returns true if any bet changed (then saved, so it syncs).
 async function refreshCloses() {
   const now = Date.now();
-  const need = BETS.flatMap(b => b.legs.map(l => [l, b])).filter(([l]) => !l.close && l.gid && STAT[l.stat]
+  const need = BETS.flatMap(b => b.legs.map(l => [l, b])).filter(([l]) => (!l.close || (!l.close.none && !l.close.final)) && l.gid && STAT[l.stat]
     && Date.parse(l.tip_iso) - now < 30 * 60e3 && now - Date.parse(l.tip_iso) < 6 * 864e5);
   if (!need.length) return false;
   const C = await loadClosing();
@@ -2104,8 +2141,8 @@ async function refreshCloses() {
   let n = 0;
   for (const [l, b] of need) {
     const G = C.games[l.gid];
-    if (G) { attachClose(l, b, G); n++; }
-    else if (now - Date.parse(l.tip_iso) > 3 * 3600e3) { l.close = { none: 'closing prices not captured for this game' }; n++; }
+    if (G) { if (!l.close || l.close.at !== G.at || (!l.close.final && (G.final || now - Date.parse(l.tip_iso) > 3600e3))) { attachClose(l, b, G); n++; } }
+    else if (!l.close && now - Date.parse(l.tip_iso) > 3 * 3600e3) { l.close = { none: 'closing prices not captured for this game' }; n++; }
   }
   if (n) saveBets();
   return n > 0;
@@ -2120,7 +2157,8 @@ let CREQ_BUSY = false;
 async function askClosing() {
   const tok = (localStorage.getItem('lineboard:refresh:token') || '').trim(), now = Date.now();
   if (!tok || CREQ_BUSY) return false;
-  const tips = BETS.flatMap(b => b.status === 'Pending' ? b.legs : []).filter(l => !l.close && Date.parse(l.tip_iso) > now + 4 * 60e3).map(l => Date.parse(l.tip_iso));
+  const tips = BETS.flatMap(b => b.status === 'Pending' ? b.legs : []).filter(l => (!l.close || !l.close.final) && (Date.parse(l.tip_iso) > now + 4 * 60e3 || legOpen(l)))
+    .map(l => Math.max(Date.parse(l.tip_iso), now + 10 * 60e3));
   if (!tips.length) return false;
   const until = Math.max(...tips), last = loadLS('lineboard:closing:asked', null);
   if (last && last.until >= until && now - last.at < 5 * 3600e3) return false;
@@ -2147,7 +2185,7 @@ function closeTxt(l) {
   if (!c) return '';
   if (c.none) return `<span class="small">Closing price: ${esc(c.none)}</span>`;
   const moved = c.line !== l.line ? ` (DK line ${lineTxt(c.line)}: yours is ${forSide(l, c.line - l.line) > 0 ? 'better' : 'worse'})` : '';
-  return `<span class="small">Close ${esc(/draft\s*kings/i.test(c.src) ? 'DK' : c.src)}: O ${lineTxt(c.line)} ${c.over.toFixed(2)} / U ${c.under.toFixed(2)} · vig ${(100 * c.vig).toFixed(1)}% · fair ${c.fairOdds != null ? c.fairOdds.toFixed(2) : '–'}${moved}${
+  return `<span class="small">${c.final ? 'Close' : 'Latest'} ${esc(/draft\s*kings/i.test(c.src) ? 'DK' : c.src)}${c.after ? ' (taken before you bet)' : ''}: O ${lineTxt(c.line)} ${c.over.toFixed(2)} / U ${c.under.toFixed(2)} · vig ${(100 * c.vig).toFixed(1)}% · fair ${c.fairOdds != null ? c.fairOdds.toFixed(2) : '–'}${moved}${
     c.clv != null ? ` → <b class="${plCls(c.clv)}">CLV ${sgn(100 * c.clv, 1)}%</b>` : ''}</span>`;
 }
 
@@ -2223,7 +2261,7 @@ function betCard(b) {
     ${b.voidAdjusted && b.paid == null ? '<p class="note" style="margin:0">A leg was void, so the payout here is the multi\'s price divided by that leg\'s own odds. If the bookie paid something else, put it in Edit → Paid out.</p>' : ''}
     ${b.note ? `<p class="note" style="margin:0">Note: ${esc(b.note)}</p>` : ''}
     <details class="more"><summary>All details</summary>${b.legs.map(l => legDetails(l, b)).join('<hr style="border:0;border-top:1px solid var(--line);margin:8px 0">')}</details>
-    <div class="bc-act"><button type="button" data-edit>Edit</button>${b.legs.some(l => Date.parse(l.tip_iso) > Date.now()) ? '<button type="button" data-reuse>Reuse selections</button>' : ''}<button type="button" data-del>Remove</button></div></article>`;
+    <div class="bc-act"><button type="button" data-edit>Edit</button>${b.legs.some(legOpen) ? '<button type="button" data-reuse>Reuse selections</button>' : ''}<button type="button" data-del>Remove</button></div></article>`;
 }
 function plBox(key, label, val) {
   const hid = TRK.hide[key];
@@ -2305,7 +2343,7 @@ function renderBetsTab(el) {
     });
     on('[data-reuse]', () => {
       let n = 0;
-      for (const l of b.legs) if (Date.parse(l.tip_iso) > Date.now() && !SLIP.some(x => x.id === l.id)) { SLIP.push(makeLeg({ ...l, book: Object.keys(BOOK_NAME).find(k => BOOK_NAME[k] === l.book) || l.book }) || { ...l, status: 'Pending', actual: null }); n++; }
+      for (const l of b.legs) if (legOpen(l) && !SLIP.some(x => x.id === l.id)) { SLIP.push(makeLeg({ ...l, book: Object.keys(BOOK_NAME).find(k => BOOK_NAME[k] === l.book) || l.book }) || { ...l, status: 'Pending', actual: null }); n++; }
       saveSlip(); renderSlip(); fillHits(SLIP).then(ok => { if (ok) { saveSlip(); if (SLIP_OPEN) renderSlip(); } }); toast(n ? `${n} leg${n > 1 ? 's' : ''} back in your slip.` : 'Those legs are already in your slip or have started.');
     });
     on('[data-save]', () => {
@@ -2814,9 +2852,9 @@ function mergeGames(dst, src, okGame) {
   }
   return changed;
 }
-const propGameOk = gid => { const g = gameById(gid); return !!g && Date.parse(g.tip_iso) > Date.now(); };
+const propGameOk = gid => { const g = gameById(gid); return !!g && !hasStarted(g); };
 // a game this device's slate doesn't have (its model ran at a different time) stays for 36 hours after its prices
-const propGameLive = (gid, G) => { const g = gameById(gid); return g ? Date.parse(g.tip_iso) > Date.now() : Date.now() - (G.at || 0) < 36 * 3600e3; };
+const propGameLive = (gid, G) => { const g = gameById(gid); return g ? !hasStarted(g) : Date.now() - (G.at || 0) < 36 * 3600e3; };
 const mtMap = games => Object.fromEntries(Object.entries(games || {}).map(([gid, G]) => [gid, (G && G.mt) || {}]));
 const propsAhead = () => Object.entries(PROPS.games).some(([gid, G]) => Object.entries(G.mt || {}).some(([m, t]) => !((((SYNC.pmt || {})[gid]) || {})[m] >= t)));
 const propsBehind = () => Object.entries(SYNC.pmt || {}).some(([gid, mt]) => propGameOk(gid) && Object.entries(mt || {}).some(([m, t]) => !((((PROPS.games[gid] || {}).mt) || {})[m] >= t)));
@@ -2970,6 +3008,7 @@ document.addEventListener('click', async e => {
 let LAST_VIS_SYNC = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && SB_USER && Date.now() - LAST_VIS_SYNC > 30e3) { LAST_VIS_SYNC = Date.now(); syncNow(); }
+  if (document.visibilityState === 'visible') refreshStates().then(ch => { if (ch) rerenderProps(); });
   if (document.visibilityState === 'visible' && location.hash.startsWith('#/bets') && Date.now() - LIVE_AT > 20e3)
     Promise.all([refreshLive(), refreshCloses()]).then(([a, c]) => { if (a || c) rerenderBets(); });   // back in the app: fresh numbers
 });
@@ -2983,7 +3022,9 @@ function start(d) {
   $('#season').textContent = `NBA ${d.season} · ${d.label || ''}`;
   $('#stamp').textContent = `Updated ${d.generated} (Melbourne) · ${d.games.length} games · positions from Basketball-Reference`;
   route();
+  refreshStates(true).then(ch => { if (ch) rerenderProps(); });
 }
+setInterval(() => { if (document.visibilityState === 'visible' && location.hash.startsWith('#/props')) refreshStates().then(ch => { if (ch) rerenderProps(); }); }, 60e3);
 // ---- refresh the NBA model from the phone (refresh.js): ask, wait for the cloud or the laptop to publish, then
 // load the new numbers in place. The GitHub API has the new files seconds after the push; Pages can lag minutes.
 const MINDEX_API = 'https://api.github.com/repos/valuevault-epl/lineboard/contents/matchups/index.json?ref=main';
